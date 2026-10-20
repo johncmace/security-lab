@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Flask Fundamentals</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: a Flask request walkthrough — one annotated route, then the request lifecycle stage by stage,
+     each tagged with who's responsible (the framework vs you) and linked to the matching lesson.
+     Shares the suite's palette and IBM Plex pairing. */
+  :root {
+    --bg: #eef1f8; --surface: #ffffff; --surface-2: #e7ebf4; --border: #d4dae8;
+    --fg: #182031; --muted: #5a677e; --accent: #3f5bd6; --accent-soft: #e4e9fb;
+    --danger: #c92f24; --danger-soft: #fbe4e1; --safe: #0a8d64; --safe-soft: #d8f3e8;
+    --amber: #9a6400; --amber-soft: #fbeecd;
+    --code-bg: #0e1626; --code-fg: #c7d2e6; --code-dim: #6f7f9c;
+    --code-kw: #b98cf0; --code-str: #ffc061; --code-fn: #8fa6cf; --code-note: #5c6b86; --code-safe: #4fd6a3;
+    --radius: 14px; --radius-sm: 9px; --maxw: 920px;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+      --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+      --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+      --amber: #ffc061; --amber-soft: #2c2415; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+    --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+    --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+    --amber: #ffc061; --amber-soft: #2c2415; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)); padding-block: 28px 56px; }
+
+  .backlink { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: .76rem; color: var(--muted); text-decoration: none; margin-bottom: 18px; transition: color .15s; }
+  .backlink:hover { color: var(--accent); }
+  .eyebrow { font-family: var(--mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.05; letter-spacing: -.02em; margin: 0 0 12px; text-wrap: balance; }
+  h1 .hl { color: var(--accent); }
+  .lede { max-width: 60ch; color: var(--muted); font-size: 1.02rem; margin: 0 0 22px; }
+
+  .codewrap { margin-bottom: 18px; }
+  .code-title { font-family: var(--mono); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .inspect { font-family: var(--mono); font-size: .86rem; line-height: 1.85; background: var(--code-bg); color: var(--code-fg); border-radius: var(--radius-sm); padding: 16px; overflow-x: auto; white-space: pre; }
+  .kw { color: var(--code-kw); } .str { color: var(--code-str); } .fn { color: var(--code-fn); } .cmt { color: var(--code-note); } .safe { color: var(--code-safe); }
+  .mk { color: var(--accent); font-weight: 600; }
+
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 12px 15px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 4px; }
+  .switch { display: inline-flex; padding: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; gap: 2px; }
+  .switch button { font-family: var(--mono); font-size: .8rem; font-weight: 500; border: 0; background: transparent; color: var(--muted); padding: 7px 14px; border-radius: 999px; cursor: pointer; transition: background .18s, color .18s; }
+  .switch button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .toolbar .hint { font-size: .88rem; color: var(--muted); min-width: 0; flex: 1 1 220px; }
+
+  .pipe { margin-top: 18px; display: flex; flex-direction: column; }
+  .connector { width: 2px; height: 16px; margin-left: 28px; background: var(--border); }
+  .stage { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; background: var(--surface); transition: opacity .2s; }
+  .pipe.focus .stage[data-resp="flask"] { opacity: .4; }
+  .stage .sh { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .stage .num { font-family: var(--mono); font-size: .68rem; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 8px; }
+  .stage h3 { font-size: 1.05rem; margin: 0; letter-spacing: -.01em; }
+  .resp { margin-left: auto; font-family: var(--mono); font-size: .64rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; }
+  .resp.flask { background: var(--safe-soft); color: var(--safe); }
+  .resp.you { background: var(--amber-soft); color: var(--amber); }
+  .resp.shared { background: var(--accent-soft); color: var(--accent); }
+  .stage .what { margin: 0 0 10px; font-size: .95rem; }
+  .stage .what code { font-family: var(--mono); font-size: .85em; background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+  .secnote { font-size: .9rem; border-top: 1px solid var(--border); padding-top: 10px; color: var(--muted); }
+  .secnote .k { font-family: var(--mono); font-size: .64rem; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin-right: 6px; }
+  .secnote a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  .secnote a:hover { border-bottom-color: var(--accent); }
+  .boundary { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: .66rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--danger); background: var(--danger-soft); border-radius: 6px; padding: 3px 9px; margin-top: 2px; }
+
+  .foot { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--border); font-size: .88rem; color: var(--muted); }
+  .foot a { color: var(--accent); }
+  .foot p { margin: 0 0 8px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="backlink" href="./index.html">&larr; Web Security Lab</a>
+    <p class="eyebrow">Foundations · Python Flask</p>
+    <h1>How a Flask request <span class="hl">works</span></h1>
+    <p class="lede">Every vulnerability in this lab happens somewhere in the path a request takes through your app. Here's that path in Flask — one small route, traced stage by stage — showing what the framework secures for you and what it leaves to you. The danger is almost always at the boundary where untrusted input arrives.</p>
+  </header>
+
+  <div class="codewrap">
+    <div class="code-title">A minimal Flask route</div>
+    <div class="inspect"><span class="kw">from</span> flask <span class="kw">import</span> Flask, request, render_template, session, abort
+app = <span class="fn">Flask</span>(__name__)
+
+<span class="mk">@app.route(<span class="str">"/profile"</span>)</span>                        <span class="cmt"># 1 routing</span>
+<span class="kw">def</span> <span class="fn">profile</span>():
+    name = request.args.<span class="fn">get</span>(<span class="str">"name"</span>)             <span class="cmt"># 2 input enters — trust boundary</span>
+    <span class="kw">if</span> <span class="str">"user_id"</span> <span class="kw">not in</span> session:            <span class="cmt"># 3 authn / authz</span>
+        <span class="fn">abort</span>(<span class="str">401</span>)
+    row = db.<span class="fn">execute</span>(                          <span class="cmt"># 4 data access</span>
+        <span class="str">"SELECT * FROM users WHERE name = ?"</span>, (name,))
+    <span class="kw">return</span> <span class="fn">render_template</span>(                   <span class="cmt"># 5 rendering (Jinja2)</span>
+        <span class="str">"profile.html"</span>, user=row)              <span class="cmt"># 6 response + session cookie</span></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="switch" role="group" aria-label="Focus">
+      <button data-focus="all" aria-pressed="true">Full walkthrough</button>
+      <button data-focus="you" aria-pressed="false">Just my responsibilities</button>
+    </div>
+    <p class="hint" id="hint">Green stages are handled by Flask; amber stages are yours to secure.</p>
+  </div>
+
+  <div class="pipe" id="pipe">
+    <div class="connector"></div>
+    <section class="stage" data-resp="flask">
+      <div class="sh"><span class="num">1</span><h3>Routing</h3><span class="resp flask">Flask handles</span></div>
+      <p class="what"><code>@app.route("/profile")</code> maps the URL to your view function. Werkzeug (Flask's engine) parses the raw HTTP request into a tidy <code>request</code> object.</p>
+      <p class="secnote"><span class="k">Security</span>Every route you expose is attack surface. Keep internal or admin routes off public URLs and behind checks.</p>
+    </section>
+
+    <div class="connector"></div>
+    <section class="stage" data-resp="you">
+      <div class="sh"><span class="num">2</span><h3>Input enters</h3><span class="resp you">Your job</span></div>
+      <p class="what"><code>request.args</code>, <code>request.form</code>, <code>request.json</code>, <code>request.cookies</code> — all of it comes from the client, so all of it is attacker-controlled.</p>
+      <span class="boundary">⚠ Trust boundary</span>
+      <p class="secnote" style="margin-top:10px"><span class="k">Security</span>Validate and normalise everything here. This is the source for <a href="./sql-injection.html">SQL injection</a>, <a href="./xss.html">XSS</a> and <a href="./path-traversal.html">path traversal</a>.</p>
+    </section>
+
+    <div class="connector"></div>
+    <section class="stage" data-resp="you">
+      <div class="sh"><span class="num">3</span><h3>Authentication &amp; authorisation</h3><span class="resp you">Your job</span></div>
+      <p class="what">Flask gives you <code>session</code> — a signed cookie — but <em>who</em> the user is and <em>what</em> they may do is logic you write. The <code>abort(401)</code> here is a check you added.</p>
+      <p class="secnote"><span class="k">Security</span>Mind the difference: <a href="./auth-vs-authz.html">AuthN vs AuthZ</a>. See it break in <a href="./broken-auth.html">Broken Authentication</a>.</p>
+    </section>
+
+    <div class="connector"></div>
+    <section class="stage" data-resp="you">
+      <div class="sh"><span class="num">4</span><h3>Data access</h3><span class="resp you">Your job</span></div>
+      <p class="what">The <code>?</code> placeholder with <code>(name,)</code> is a parameterised query — the database treats <code>name</code> as a value, never as SQL. Flask does nothing here; the safety is your choice of query style.</p>
+      <p class="secnote"><span class="k">Security</span>Build strings by hand instead and you get <a href="./sql-injection.html">SQL injection</a>. Parameterise, or use an ORM like SQLAlchemy.</p>
+    </section>
+
+    <div class="connector"></div>
+    <section class="stage" data-resp="flask">
+      <div class="sh"><span class="num">5</span><h3>Rendering the template</h3><span class="resp flask">Flask handles</span></div>
+      <p class="what"><code>render_template</code> runs Jinja2, which <strong>auto-escapes</strong> variables by default — so <code>{{ user.name }}</code> can't inject HTML. This is free XSS protection you get just by using templates.</p>
+      <p class="secnote"><span class="k">Security</span>You lose it the moment you use <code>| safe</code>, <code>render_template_string</code> or build HTML by hand on user input. See <a href="./xss.html">XSS</a>.</p>
+    </section>
+
+    <div class="connector"></div>
+    <section class="stage" data-resp="shared">
+      <div class="sh"><span class="num">6</span><h3>Response &amp; session cookie</h3><span class="resp shared">Shared</span></div>
+      <p class="what">Flask signs the session cookie with <code>SECRET_KEY</code> (tamper-proofing, not encryption). You set the cookie flags — <code>HttpOnly</code>, <code>Secure</code>, <code>SameSite</code> — and, importantly, Flask does <strong>not</strong> protect forms against CSRF by default.</p>
+      <p class="secnote"><span class="k">Security</span>Keep <code>SECRET_KEY</code> out of the code (→ secrets &amp; config), harden the cookie (→ session security), and add CSRF tokens with Flask-WTF. See <a href="./csrf.html">CSRF</a>.</p>
+    </section>
+  </div>
+
+  <div class="foot">
+    <p>Four of the six stages are yours to secure — the framework is a strong default, not a guarantee. The lessons linked above each take one of these stages apart.</p>
+    <p>A safe overview for teaching; the code is illustrative and deliberately minimal.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var pipe = document.getElementById("pipe");
+  var hint = document.getElementById("hint");
+  document.querySelectorAll(".switch button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var f = b.dataset.focus;
+      document.querySelectorAll(".switch button").forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      if (f === "you") {
+        pipe.classList.add("focus");
+        hint.textContent = "Showing the four stages you're responsible for; Flask-handled stages are dimmed.";
+      } else {
+        pipe.classList.remove("focus");
+        hint.textContent = "Green stages are handled by Flask; amber stages are yours to secure.";
+      }
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
