@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Broken Auth X-Ray</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: a session-cookie pipeline (token in play → forge another user's → server check → impact).
+     The lesson: a token should be a random handle the server looks up, not data the attacker can rewrite.
+     Shares the suite's palette and IBM Plex pairing. Tokens and users are invented. */
+  :root {
+    --bg: #eef1f8; --surface: #ffffff; --surface-2: #e7ebf4; --border: #d4dae8;
+    --fg: #182031; --muted: #5a677e; --accent: #3f5bd6; --accent-soft: #e4e9fb;
+    --danger: #c92f24; --danger-soft: #fbe4e1; --safe: #0a8d64; --safe-soft: #d8f3e8;
+    --data-ink: #9a6400; --data-soft: #fbeecd;
+    --code-bg: #0e1626; --code-fg: #c7d2e6; --code-dim: #6f7f9c;
+    --code-sql: #8fa6cf; --code-data: #ffc061; --code-inject: #ff6d60; --code-comment: #5c6b86; --code-param: #4fd6a3;
+    --radius: 14px; --radius-sm: 9px; --maxw: 920px;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+      --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+      --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+      --data-ink: #ffc061; --data-soft: #2c2415; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+    --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+    --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+    --data-ink: #ffc061; --data-soft: #2c2415; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)); padding-block: 28px 56px; }
+
+  .backlink { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: .76rem; color: var(--muted); text-decoration: none; margin-bottom: 18px; transition: color .15s; }
+  .backlink:hover { color: var(--accent); }
+  .eyebrow { font-family: var(--mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.05; letter-spacing: -.02em; margin: 0 0 12px; text-wrap: balance; }
+  h1 .hl { color: var(--danger); }
+  .lede { max-width: 60ch; color: var(--muted); font-size: 1.02rem; margin: 0 0 22px; }
+
+  .modebar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; }
+  .switch { display: inline-flex; padding: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; gap: 2px; }
+  .switch button { font-family: var(--mono); font-size: .82rem; font-weight: 500; border: 0; background: transparent; color: var(--muted); padding: 7px 16px; border-radius: 999px; cursor: pointer; transition: background .18s, color .18s; }
+  .switch button[aria-pressed="true"] { color: #fff; }
+  .switch button[data-mode="vuln"][aria-pressed="true"] { background: var(--danger); }
+  .switch button[data-mode="secure"][aria-pressed="true"] { background: var(--safe); color: #06231a; }
+  .mode-note { font-size: .9rem; color: var(--muted); min-width: 0; flex: 1 1 240px; }
+  .mode-note strong { color: var(--fg); }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .panel-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .stepno { font-family: var(--mono); font-size: .72rem; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 7px; letter-spacing: .05em; }
+  .panel-h h2 { font-size: 1.04rem; margin: 0; letter-spacing: -.01em; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-family: var(--mono); font-size: .8rem; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); padding: 8px 12px; border-radius: 999px; cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
+  .chip:hover { border-color: var(--accent); }
+  .chip:active { transform: translateY(1px); }
+  .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .chip .tag { font-size: .64rem; text-transform: uppercase; letter-spacing: .08em; padding: 1px 5px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+  .chip .tag.ok { background: var(--safe-soft); color: var(--safe); }
+  .chip .tag.bad { background: var(--danger-soft); color: var(--danger); }
+
+  .actionbar { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .run { font-family: var(--sans); font-weight: 600; font-size: .92rem; color: #fff; background: var(--accent); border: 0; border-radius: var(--radius-sm); padding: 11px 20px; cursor: pointer; white-space: nowrap; transition: filter .15s, transform .05s; }
+  .run:hover { filter: brightness(1.08); }
+  .run:active { transform: translateY(1px); }
+  .actionbar .hint { font-size: .86rem; color: var(--muted); min-width: 0; }
+
+  .pipe { margin-top: 20px; display: flex; flex-direction: column; }
+  .connector { width: 2px; height: 20px; margin-left: 30px; background: var(--border); }
+  .connector.live { background: linear-gradient(var(--danger), var(--border)); }
+  .connector.safe { background: linear-gradient(var(--safe), var(--border)); }
+
+  .inspect { font-family: var(--mono); font-size: .86rem; line-height: 1.8; background: var(--code-bg); color: var(--code-fg); border-radius: var(--radius-sm); padding: 14px 15px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  .inspect .lbl { display: block; font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--code-dim); margin-bottom: 7px; }
+  .q-sql { color: var(--code-sql); }
+  .q-data { color: var(--code-data); }
+  .q-inject { color: var(--code-inject); font-weight: 600; background: #ff6d6020; border-radius: 3px; padding: 0 1px; }
+  .q-param { color: var(--code-param); font-weight: 600; }
+  .q-comment { color: var(--code-comment); }
+
+  .placeholder { font-family: var(--mono); font-size: .84rem; color: var(--muted); background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 16px; text-align: center; }
+
+  .resp { border-radius: var(--radius-sm); padding: 14px 15px; border: 1px solid var(--border); }
+  .resp.ok { background: var(--safe-soft); border-color: transparent; }
+  .resp.bad { background: var(--danger-soft); border-color: transparent; }
+  .resp .status { font-family: var(--mono); font-weight: 600; font-size: .9rem; margin-bottom: 6px; }
+  .resp.ok .status { color: var(--safe); }
+  .resp.bad .status { color: var(--danger); }
+  .resp .msg { font-size: .96rem; }
+
+  .result { border-left: 4px solid var(--border); margin-top: 14px; padding: 16px; background: var(--surface); border-radius: var(--radius); }
+  .result.ok { border-left-color: var(--safe); }
+  .result.danger { border-left-color: var(--danger); }
+  .result.safe { border-left-color: var(--safe); }
+  .verdict { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; margin-bottom: 10px; }
+  .verdict.ok { background: var(--safe-soft); color: var(--safe); }
+  .verdict.danger { background: var(--danger-soft); color: var(--danger); }
+  .verdict.safe { background: var(--safe-soft); color: var(--safe); }
+  .result h3 { margin: 0 0 6px; font-size: 1.12rem; letter-spacing: -.01em; }
+  .result p { margin: 0; color: var(--muted); }
+  .impact { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); font-size: .95rem; }
+  .impact .k { font-family: var(--mono); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px; }
+
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .meta { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 13px; }
+  .meta .k { font-family: var(--mono); font-size: .64rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 5px; }
+  .meta .v { font-weight: 600; font-size: .96rem; }
+  .meta .v.crit { color: var(--danger); }
+  .sev-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .sev-pill { font-family: var(--mono); font-weight: 600; font-size: .8rem; padding: 6px 14px; border-radius: 999px; background: var(--danger); color: #fff; letter-spacing: .03em; }
+  .sev-row span.exp { color: var(--muted); font-size: .9rem; min-width: 0; }
+
+  .foot { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--border); font-size: .88rem; color: var(--muted); }
+  .foot a { color: var(--accent); }
+  .foot p { margin: 0 0 8px; }
+
+  .flash { animation: flash .6s ease; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--danger); } 30% { box-shadow: 0 0 0 3px var(--danger-soft); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="backlink" href="./index.html">&larr; Web Security Lab</a>
+    <p class="eyebrow">Web security · OWASP A07 · CWE-287</p>
+    <h1>Broken authentication, <span class="hl">X-rayed</span></h1>
+    <p class="lede">When you log in, the server hands your browser a session cookie that keeps you logged in. If that cookie <em>encodes who you are</em> — your id, your name, a hash of it — instead of being a random handle the server looks up, then anyone can edit their own cookie and become someone else. Forge an admin session, then switch on tokens that can't be forged.</p>
+  </header>
+
+  <div class="modebar">
+    <div class="switch" role="group" aria-label="Token design">
+      <button data-mode="vuln" aria-pressed="true">Vulnerable</button>
+      <button data-mode="secure" aria-pressed="false">Random tokens</button>
+    </div>
+    <p class="mode-note" id="modeNote"><strong>Vulnerable:</strong> the cookie encodes your identity, and the server trusts whatever it says.</p>
+  </div>
+
+  <section class="panel">
+    <div class="panel-h"><span class="stepno">01</span><h2>Choose how the server makes session cookies</h2></div>
+    <div class="chips" id="chips" role="group" aria-label="Attack scenario"></div>
+    <div class="actionbar">
+      <button class="run" id="run">Send the cookie to the server</button>
+      <span class="hint">The attacker has their own account, <strong>mallory</strong>, and is targeting <strong>admin</strong>.</span>
+    </div>
+  </section>
+
+  <div class="pipe">
+    <div class="connector" id="c1"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">02</span><h2>The cookie the attacker starts with</h2></div>
+      <div id="tokenOut"><div class="placeholder">Send the cookie to see what the attacker holds.</div></div>
+    </section>
+
+    <div class="connector" id="c2"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">03</span><h2>Forging the admin's cookie</h2></div>
+      <div id="forgeOut"><div class="placeholder">The forging step appears here.</div></div>
+    </section>
+
+    <div class="connector" id="c3"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">04</span><h2>What the server does</h2></div>
+      <div id="respOut"><div class="placeholder">The server's response appears here.</div></div>
+      <div id="resultOut"></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:14px">
+    <div class="panel-h"><span class="stepno">·</span><h2>Why it matters</h2></div>
+    <div class="meta-grid">
+      <div class="meta"><span class="k">Vulnerability</span><span class="v">Broken Authentication</span></div>
+      <div class="meta"><span class="k">OWASP Top 10</span><span class="v">A07:2021 — Auth Failures</span></div>
+      <div class="meta"><span class="k">Weakness</span><span class="v">CWE-287</span></div>
+      <div class="meta"><span class="k">Exploitability</span><span class="v crit">High — edit your own cookie</span></div>
+    </div>
+    <div class="sev-row">
+      <span class="sev-pill">Risk: Critical</span>
+      <span class="exp">Forging another user's session is full account takeover — and forging the admin's is control of the whole application.</span>
+    </div>
+  </section>
+
+  <div class="foot">
+    <p>This is a safe, in-browser simulation. No real login or server is involved — the accounts, cookies and responses are invented and depicted.</p>
+    <p>To practise against a real target in a controlled lab, use <a href="https://owasp.org/www-project-juice-shop/" target="_blank" rel="noopener">OWASP Juice Shop</a> or <a href="https://portswigger.net/web-security/authentication" target="_blank" rel="noopener">PortSwigger's authentication labs</a>.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SCENARIOS = {
+    legit: { label: "Your own login",   tag: "ok",  kind: "legit" },
+    seq:   { label: "Sequential ID",    tag: "bad", kind: "seq" },
+    b64:   { label: "Base64 username",  tag: "bad", kind: "b64" },
+    md5:   { label: "MD5 username",     tag: "bad", kind: "md5" }
+  };
+
+  // Real, well-known values so the lesson is accurate.
+  var DATA = {
+    legit: { own: "9f3c1a7e4b2d08c6a51f…e2", decode: null, forged: null, note: "a long random value" },
+    seq:   { own: "1002", decode: "user id 1002 (mallory)", forged: "1", note: "it's just your user id — admin is id 1" },
+    b64:   { own: "bWFsbG9yeQ==", decode: 'base64 → "mallory"', forged: "YWRtaW4=", note: "it's base64 of your username" },
+    md5:   { own: "9c69… (md5 of \"mallory\")", decode: 'md5 of "mallory"', forged: "21232f297a57a5a743894a0e4a801fc3", note: "it's md5 of your username" }
+  };
+
+  var mode = "vuln";
+  var current = "seq";
+  var hasRun = false;
+
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  var seg = function (k, t) { return '<span class="q-' + k + '">' + esc(t) + "</span>"; };
+  var line = function (k, t) { return seg(k, t) + "\n"; };
+
+  function tokenPanel(kind) {
+    var d = DATA[kind];
+    var out = '<div class="inspect">';
+    if (kind === "legit") {
+      out += '<span class="lbl">alice logs in and the server issues her cookie</span>';
+      out += line("param", "Set-Cookie: session=" + DATA.legit.own) +
+        seg("q-comment", "— a random handle; it says nothing about who she is");
+      return out + "</div>";
+    }
+    if (mode === "secure") {
+      out += '<span class="lbl">The attacker logs in as mallory and inspects the cookie</span>';
+      out += line("param", "Cookie: session=9f3c1a7e4b2d08c6a51f…e2") +
+        seg("q-comment", "— random. There is no pattern to copy.");
+      return out + "</div>";
+    }
+    out += '<span class="lbl">The attacker logs in as mallory and inspects the cookie</span>';
+    out += line("data", "Cookie: session=" + d.own) + seg("q-comment", "— " + d.note);
+    return out + "</div>";
+  }
+
+  function forgePanel(kind) {
+    var d = DATA[kind];
+    var out = '<div class="inspect">';
+    if (kind === "legit") {
+      out += '<span class="lbl">Nothing to forge</span>' + seg("q-comment", "alice simply sends her own cookie back.");
+      return out + "</div>";
+    }
+    if (mode === "secure") {
+      out += '<span class="lbl">The attacker tries to forge an admin cookie</span>';
+      out += line("param", "session is random and stored server-side — nothing to compute.") +
+        seg("q-comment", "guessing a 48-char token is 2^192 tries; brute force is hopeless.");
+      return out + "</div>";
+    }
+    out += '<span class="lbl">The attacker rewrites the cookie to target admin</span>';
+    if (kind === "seq") {
+      out += line("sql", "change the number: ") + seg("inject", "session=1") + seg("q-comment", "   (admin)");
+    } else if (kind === "b64") {
+      out += line("sql", 'decode("' + d.own + '") = "mallory"') +
+        line("sql", 'encode("admin") = ') + seg("inject", "session=YWRtaW4=");
+    } else {
+      out += line("sql", 'md5("admin") = ') + seg("inject", "session=" + d.forged);
+    }
+    return out + "</div>";
+  }
+
+  function response(kind) {
+    if (kind === "legit") {
+      return '<div class="resp ok"><div class="status">200 OK</div><div class="msg">Signed in as alice — her own session.</div></div>';
+    }
+    if (mode === "secure") {
+      return '<div class="resp bad"><div class="status">401 Unauthorized</div>' +
+        '<div class="msg">The forged token is not in the session store, so it maps to no user. Rejected.</div></div>';
+    }
+    return '<div class="resp ok"><div class="status">200 OK</div>' +
+      '<div class="msg">The server reads the cookie, trusts it, and signs the attacker in as <strong>admin</strong>.</div></div>';
+  }
+
+  function result(kind) {
+    if (kind === "legit") {
+      return { cls: "ok", verdict: "Signed in", title: "alice reached her own account.",
+        detail: "The cookie is a random handle the server looks up — the correct design, working normally.",
+        impK: "Security impact", imp: "None — baseline behaviour." };
+    }
+    if (mode === "secure") {
+      return { cls: "safe", verdict: "Forgery blocked", title: "The forged cookie mapped to nobody.",
+        detail: "A random token carries no identity, so there is nothing to edit. The server only trusts tokens it actually issued and stored.",
+        impK: "Why it's safe", imp: "Use long, random session IDs looked up server-side — never identity encoded in the cookie." };
+    }
+    return { cls: "danger", verdict: "Account takeover", title: "The attacker is now logged in as admin.",
+      detail: "Because the cookie encodes identity, editing it is enough to become any user. No password, no lockout, nothing in the way.",
+      impK: "Security impact", imp: "Vertical privilege escalation to administrator — full control of the application and its data." };
+  }
+
+  function resetPipeline() {
+    document.getElementById("tokenOut").innerHTML = '<div class="placeholder">Press “Send the cookie to the server” to run.</div>';
+    document.getElementById("forgeOut").innerHTML = '<div class="placeholder">The forging step appears here.</div>';
+    document.getElementById("respOut").innerHTML = '<div class="placeholder">The server’s response appears here.</div>';
+    document.getElementById("resultOut").innerHTML = "";
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector"; });
+    hasRun = false;
+  }
+
+  function run() {
+    var kind = SCENARIOS[current].kind;
+    document.getElementById("tokenOut").innerHTML = tokenPanel(kind);
+    document.getElementById("forgeOut").innerHTML = forgePanel(kind);
+    document.getElementById("respOut").innerHTML = response(kind);
+    var r = result(kind);
+    document.getElementById("resultOut").innerHTML =
+      '<div class="result ' + r.cls + '"><span class="verdict ' + r.cls + '">' + r.verdict + "</span><h3>" +
+      esc(r.title) + "</h3><p>" + esc(r.detail) + '</p><div class="impact"><span class="k">' + r.impK + "</span>" + esc(r.imp) + "</div></div>";
+
+    var safe = (kind === "legit") || (mode === "secure");
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector " + (safe ? "safe" : "live"); });
+    var rp = document.getElementById("resultOut").firstChild;
+    if (rp) { rp.classList.add("flash"); setTimeout(function () { rp.classList.remove("flash"); }, 650); }
+    hasRun = true;
+  }
+
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll(".switch button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.mode === m ? "true" : "false"); });
+    document.getElementById("modeNote").innerHTML = m === "vuln"
+      ? "<strong>Vulnerable:</strong> the cookie encodes your identity, and the server trusts whatever it says."
+      : "<strong>Random tokens:</strong> the cookie is a long random value the server looks up in its session store.";
+    if (hasRun) run();
+  }
+
+  function selectScenario(key) {
+    current = key;
+    document.querySelectorAll(".chip").forEach(function (c) { c.setAttribute("aria-pressed", c.dataset.key === key ? "true" : "false"); });
+    resetPipeline();
+  }
+
+  var chipsEl = document.getElementById("chips");
+  Object.keys(SCENARIOS).forEach(function (key) {
+    var s = SCENARIOS[key];
+    var b = document.createElement("button");
+    b.className = "chip"; b.dataset.key = key; b.setAttribute("aria-pressed", "false");
+    b.innerHTML = esc(s.label) + '<span class="tag ' + s.tag + '">' + (s.tag === "ok" ? "safe" : "attack") + "</span>";
+    b.addEventListener("click", function () { selectScenario(key); });
+    chipsEl.appendChild(b);
+  });
+  document.querySelectorAll(".switch button").forEach(function (b) { b.addEventListener("click", function () { setMode(b.dataset.mode); }); });
+  document.getElementById("run").addEventListener("click", run);
+
+  selectScenario("seq");
+  run();
+})();
+</script>
+
+</body>
+</html>
