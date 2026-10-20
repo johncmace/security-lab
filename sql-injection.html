@@ -1,0 +1,773 @@
+<title>SQL Injection X-Ray</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: a vertical request pipeline (input → query → database → result),
+     with a vulnerable/secure mode switch that re-runs the same attack to contrast outcomes.
+     Page chrome is theme-aware; the code/query inspector keeps a fixed dark ground. */
+  :root {
+    --bg: #eef1f8;
+    --surface: #ffffff;
+    --surface-2: #e7ebf4;
+    --border: #d4dae8;
+    --fg: #182031;
+    --muted: #5a677e;
+    --accent: #3f5bd6;
+    --accent-soft: #e4e9fb;
+
+    --danger: #c92f24;
+    --danger-soft: #fbe4e1;
+    --safe: #0a8d64;
+    --safe-soft: #d8f3e8;
+    --data-ink: #9a6400;
+    --data-soft: #fbeecd;
+
+    /* Fixed-dark inspector panel — a deliberate, self-contained surface */
+    --code-bg: #0e1626;
+    --code-panel: #16203360;
+    --code-fg: #c7d2e6;
+    --code-dim: #6f7f9c;
+    --code-sql: #8fa6cf;
+    --code-data: #ffc061;
+    --code-inject: #ff6d60;
+    --code-comment: #5c6b86;
+    --code-param: #4fd6a3;
+
+    --radius: 14px;
+    --radius-sm: 9px;
+    --maxw: 920px;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1017;
+      --surface: #131b27;
+      --surface-2: #0f1620;
+      --border: #26303f;
+      --fg: #e7ecf5;
+      --muted: #93a1b8;
+      --accent: #7f95ff;
+      --accent-soft: #1d2740;
+      --danger: #ff6d60;
+      --danger-soft: #35201d;
+      --safe: #35e0a1;
+      --safe-soft: #10261f;
+      --data-ink: #ffc061;
+      --data-soft: #2c2415;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017;
+    --surface: #131b27;
+    --surface-2: #0f1620;
+    --border: #26303f;
+    --fg: #e7ecf5;
+    --muted: #93a1b8;
+    --accent: #7f95ff;
+    --accent-soft: #1d2740;
+    --danger: #ff6d60;
+    --danger-soft: #35201d;
+    --safe: #35e0a1;
+    --safe-soft: #10261f;
+    --data-ink: #ffc061;
+    --data-soft: #2c2415;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding-left: max(18px, env(safe-area-inset-left, 0px));
+    padding-right: max(18px, env(safe-area-inset-right, 0px));
+    padding-block: 28px 56px;
+  }
+
+  /* ---- Header ---- */
+  .backlink {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: .76rem;
+    color: var(--muted);
+    text-decoration: none;
+    margin-bottom: 18px;
+    transition: color .15s;
+  }
+  .backlink:hover { color: var(--accent); }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: clamp(1.9rem, 5vw, 2.7rem);
+    line-height: 1.05;
+    letter-spacing: -.02em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+  h1 .hl { color: var(--danger); }
+  .lede {
+    max-width: 58ch;
+    color: var(--muted);
+    font-size: 1.02rem;
+    margin: 0 0 22px;
+  }
+
+  /* ---- Mode switch ---- */
+  .modebar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 18px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 14px;
+  }
+  .switch {
+    display: inline-flex;
+    padding: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    gap: 2px;
+  }
+  .switch button {
+    font-family: var(--mono);
+    font-size: .82rem;
+    font-weight: 500;
+    letter-spacing: .02em;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 7px 16px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .18s, color .18s;
+  }
+  .switch button[aria-pressed="true"] { color: #fff; }
+  .switch button[data-mode="vuln"][aria-pressed="true"] { background: var(--danger); }
+  .switch button[data-mode="secure"][aria-pressed="true"] { background: var(--safe); }
+  :root[data-theme="dark"] .switch button[data-mode="secure"][aria-pressed="true"],
+  .switch button[data-mode="secure"][aria-pressed="true"] { color: #06231a; }
+  .mode-note {
+    font-size: .9rem;
+    color: var(--muted);
+    min-width: 0;
+    flex: 1 1 240px;
+  }
+  .mode-note strong { color: var(--fg); }
+
+  /* ---- Scenario picker ---- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .panel + .panel { margin-top: 14px; }
+  .panel-h {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .stepno {
+    font-family: var(--mono);
+    font-size: .72rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 6px;
+    padding: 2px 7px;
+    letter-spacing: .05em;
+  }
+  .panel-h h2 { font-size: 1.04rem; margin: 0; letter-spacing: -.01em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-family: var(--mono);
+    font-size: .8rem;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--fg);
+    padding: 8px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s, transform .05s;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip:active { transform: translateY(1px); }
+  .chip[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .chip .tag {
+    font-size: .64rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .chip .tag.ok { background: var(--safe-soft); color: var(--safe); }
+  .chip .tag.bad { background: var(--danger-soft); color: var(--danger); }
+
+  .req-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .field { min-width: 0; }
+  .field label {
+    display: block;
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 5px;
+  }
+  .field input {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: .88rem;
+    color: var(--fg);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 11px;
+  }
+  .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .run {
+    align-self: end;
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: .92rem;
+    color: #fff;
+    background: var(--accent);
+    border: 0;
+    border-radius: var(--radius-sm);
+    padding: 11px 20px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: filter .15s, transform .05s;
+  }
+  .run:hover { filter: brightness(1.08); }
+  .run:active { transform: translateY(1px); }
+
+  /* ---- Pipeline ---- */
+  .pipe { margin-top: 20px; display: flex; flex-direction: column; gap: 0; }
+  .stage { position: relative; }
+  .connector {
+    width: 2px;
+    height: 20px;
+    margin-left: 30px;
+    background: var(--border);
+  }
+  .connector.live { background: linear-gradient(var(--danger), var(--border)); }
+  .connector.safe { background: linear-gradient(var(--safe), var(--border)); }
+
+  .inspect {
+    font-family: var(--mono);
+    font-size: .86rem;
+    line-height: 1.7;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: var(--radius-sm);
+    padding: 14px 15px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .inspect .lbl {
+    display: block;
+    font-size: .64rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--code-dim);
+    margin-bottom: 7px;
+  }
+  .q-sql { color: var(--code-sql); }
+  .q-data { color: var(--code-data); }
+  .q-inject { color: var(--code-inject); font-weight: 600; background: #ff6d6020; border-radius: 3px; padding: 0 1px; }
+  .q-param { color: var(--code-param); font-weight: 600; }
+  .q-comment { color: var(--code-comment); text-decoration: line-through; opacity: .8; }
+
+  .code-line { margin-top: 12px; }
+  .bind { margin-top: 10px; color: var(--code-dim); }
+  .bind b { color: var(--code-data); font-weight: 600; }
+
+  .placeholder {
+    font-family: var(--mono);
+    font-size: .84rem;
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    text-align: center;
+  }
+
+  /* ---- Database table ---- */
+  .tablewrap { overflow-x: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: .82rem; }
+  caption {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 9px 11px;
+    background: var(--surface-2);
+  }
+  th, td { text-align: left; padding: 8px 11px; border-top: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: .72rem; letter-spacing: .04em; }
+  tbody tr { transition: background .3s; }
+  tr.matched td { background: var(--danger-soft); }
+  tr.matched.ok td { background: var(--safe-soft); }
+  td .sensitive { color: var(--data-ink); }
+  .leaked-note {
+    font-family: var(--mono);
+    font-size: .74rem;
+    color: var(--danger);
+    margin-top: 8px;
+  }
+
+  /* ---- Result ---- */
+  .result { border-left: 4px solid var(--border); }
+  .result.ok { border-left-color: var(--safe); }
+  .result.danger { border-left-color: var(--danger); }
+  .result.safe { border-left-color: var(--safe); }
+  .verdict {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+  }
+  .verdict.ok { background: var(--safe-soft); color: var(--safe); }
+  .verdict.danger { background: var(--danger-soft); color: var(--danger); }
+  .verdict.safe { background: var(--safe-soft); color: var(--safe); }
+  .result h3 { margin: 0 0 6px; font-size: 1.12rem; letter-spacing: -.01em; }
+  .result p { margin: 0; color: var(--muted); }
+  .impact {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: .95rem;
+  }
+  .impact .k {
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  /* ---- Risk card ---- */
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+  }
+  .meta {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 13px;
+  }
+  .meta .k {
+    font-family: var(--mono);
+    font-size: .64rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 5px;
+  }
+  .meta .v { font-weight: 600; font-size: .96rem; }
+  .meta .v.crit { color: var(--danger); }
+  .sev-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .sev-pill {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: .8rem;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: var(--danger);
+    color: #fff;
+    letter-spacing: .03em;
+  }
+  .sev-row span.exp { color: var(--muted); font-size: .9rem; min-width: 0; }
+
+  .foot {
+    margin-top: 30px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    font-size: .88rem;
+    color: var(--muted);
+  }
+  .foot a { color: var(--accent); }
+  .foot p { margin: 0 0 8px; }
+
+  .flash { animation: flash .6s ease; }
+  @keyframes flash {
+    0% { box-shadow: 0 0 0 0 var(--danger); }
+    30% { box-shadow: 0 0 0 3px var(--danger-soft); }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 560px) {
+    .req-form { grid-template-columns: 1fr; }
+    .run { width: 100%; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <a class="backlink" href="./index.html">&larr; Web Security Lab</a>
+    <p class="eyebrow">Web security · OWASP A03 · CWE-89</p>
+    <h1>SQL injection, <span class="hl">X-rayed</span></h1>
+    <p class="lede">Watch a login request travel from the browser into the database. Pick an attack, press send, and see exactly where attacker input stops being <em>data</em> and starts being <em>code</em> — then flip the switch to watch a parameterised query shut it down.</p>
+  </header>
+
+  <div class="modebar">
+    <div class="switch" role="group" aria-label="Code mode">
+      <button data-mode="vuln" aria-pressed="true">Vulnerable</button>
+      <button data-mode="secure" aria-pressed="false">Parameterised</button>
+    </div>
+    <p class="mode-note" id="modeNote"><strong>Vulnerable:</strong> the server glues your input straight into the query string.</p>
+  </div>
+
+  <section class="panel">
+    <div class="panel-h"><span class="stepno">01</span><h2>Choose what the attacker sends</h2></div>
+    <div class="chips" id="chips" role="group" aria-label="Attack scenario"></div>
+    <div class="req-form">
+      <div class="field">
+        <label for="u">username</label>
+        <input id="u" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="p">password</label>
+        <input id="p" autocomplete="off" spellcheck="false">
+      </div>
+      <button class="run" id="run">Send login request</button>
+    </div>
+  </section>
+
+  <div class="pipe">
+    <div class="connector" id="c1"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">02</span><h2>The query the server builds</h2></div>
+      <div id="queryOut"><div class="placeholder">Send a request to see the query assemble.</div></div>
+    </section>
+
+    <div class="connector" id="c2"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">03</span><h2>What the database returns</h2></div>
+      <div id="dbOut"><div class="placeholder">The matched rows will light up here.</div></div>
+    </section>
+
+    <div class="connector" id="c3"></div>
+    <section class="panel stage result" id="resultPanel">
+      <div class="panel-h"><span class="stepno">04</span><h2>Outcome &amp; impact</h2></div>
+      <div id="resultOut"><div class="placeholder">The result of the login attempt appears here.</div></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:14px">
+    <div class="panel-h"><span class="stepno">·</span><h2>Why it matters</h2></div>
+    <div class="meta-grid">
+      <div class="meta"><span class="k">Vulnerability</span><span class="v">SQL Injection</span></div>
+      <div class="meta"><span class="k">OWASP Top 10</span><span class="v">A03:2021 — Injection</span></div>
+      <div class="meta"><span class="k">Weakness</span><span class="v">CWE-89</span></div>
+      <div class="meta"><span class="k">Exploitability</span><span class="v crit">High — no auth needed</span></div>
+    </div>
+    <div class="sev-row">
+      <span class="sev-pill">Risk: Critical</span>
+      <span class="exp">High likelihood (trivial to exploit, unauthenticated) × high impact (full authentication bypass and data disclosure).</span>
+    </div>
+  </section>
+
+  <div class="foot">
+    <p>This is a safe, in-browser simulation — no real database runs here, and the rows are invented. It is built to illustrate the mechanism, not to attack anything.</p>
+    <p>To let students attack a real target in a controlled lab, use purpose-built apps such as <a href="https://owasp.org/www-project-juice-shop/" target="_blank" rel="noopener">OWASP Juice Shop</a> or <a href="https://portswigger.net/web-security" target="_blank" rel="noopener">PortSwigger's Web Security Academy</a>.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var USERS = [
+    { id: 1, username: "admin",  password: "S3cur3Admin!", role: "admin",    email: "admin@acme.test" },
+    { id: 2, username: "j.mace", password: "hunter2",      role: "lecturer", email: "j.mace@acme.test" },
+    { id: 3, username: "guest",  password: "guest",        role: "student",  email: "guest@acme.test" }
+  ];
+  var SECRETS = [
+    { id: 1, service: "stripe",   api_key: "sk_live_4e8a…redacted" },
+    { id: 2, service: "sendgrid", api_key: "SG.9f2c…redacted" }
+  ];
+
+  var SCENARIOS = {
+    normal:    { label: "Normal login",        tag: "ok",  username: "j.mace",            password: "hunter2",   kind: "normal" },
+    tautology: { label: "' OR '1'='1",         tag: "bad", username: "' OR '1'='1' -- ",  password: "anything",  kind: "tautology" },
+    comment:   { label: "admin'--",            tag: "bad", username: "admin' -- ",        password: "",          kind: "comment" },
+    union:     { label: "UNION data theft",    tag: "bad", username: "' UNION SELECT id, service, api_key, 'x', 'y' FROM secrets -- ", password: "", kind: "union" }
+  };
+
+  var mode = "vuln";
+  var current = "tautology";
+  var hasRun = false;
+
+  var esc = function (s) {
+    return String(s).replace(/[&<>]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c];
+    });
+  };
+  var seg = function (kind, text) { return '<span class="q-' + kind + '">' + esc(text) + "</span>"; };
+
+  // Build the query inspector + result for the current mode.
+  function compute(kind, u, p) {
+    if (mode === "secure") {
+      var literalMatch = USERS.filter(function (r) { return r.username === u && r.password === p; });
+      var ok = literalMatch.length > 0;
+      return {
+        query:
+          '<span class="lbl">Parameterised query — input bound as data</span>' +
+          seg("sql", "SELECT * FROM users WHERE username = ") + seg("param", "?") +
+          seg("sql", " AND password = ") + seg("param", "?") +
+          '<div class="bind">— bound values —\n  username = <b>' + esc(u || "(empty)") +
+          "</b>\n  password = <b>" + esc(p || "(empty)") + "</b></div>" +
+          '<div class="code-line"><span class="lbl">Server code</span>' +
+          seg("sql", "cur.execute(") + seg("param", '"… username = ? AND password = ?"') +
+          seg("sql", ", (username, password))") + "</div>",
+        matched: literalMatch.map(function (r) { return r.id; }),
+        leaked: [],
+        rowClass: "ok",
+        result: ok ? {
+          cls: "ok", vcls: "ok", verdict: "Login allowed",
+          title: "Signed in as " + literalMatch[0].username + ".",
+          detail: "Valid credentials, so the row matches as intended.",
+          impactK: "Security impact", impact: "None — this is a legitimate login."
+        } : {
+          cls: "safe", vcls: "safe", verdict: "Attack neutralised",
+          title: "Login failed — no user is literally named that.",
+          detail: "The whole payload is sent as one value, so the quotes, OR and -- are just characters in a string. They never become SQL.",
+          impactK: "Why it's safe", impact: "Input is treated as data, not code. The injection has nowhere to execute."
+        }
+      };
+    }
+
+    // Vulnerable mode
+    var head = '<span class="lbl">Query string the server executes</span>';
+    var codeLine = '<div class="code-line"><span class="lbl">Server code</span>' +
+      seg("sql", 'query = "… username = \'" + ') + seg("data", "username") +
+      seg("sql", ' + "\' AND password = \'" + ') + seg("data", "password") + seg("sql", ' + "\'"') + "</div>";
+
+    if (kind === "normal") {
+      var m = USERS.filter(function (r) { return r.username === u && r.password === p; });
+      return {
+        query: head + seg("sql", "SELECT * FROM users WHERE username = '") + seg("data", u) +
+          seg("sql", "' AND password = '") + seg("data", p) + seg("sql", "'") + codeLine,
+        matched: m.map(function (r) { return r.id; }), leaked: [], rowClass: "ok",
+        result: {
+          cls: "ok", vcls: "ok", verdict: "Login allowed",
+          title: "Signed in as j.mace — lecturer.",
+          detail: "No special characters, so the input stays inside the quotes as an ordinary value.",
+          impactK: "Security impact", impact: "None — baseline behaviour with honest credentials."
+        }
+      };
+    }
+    if (kind === "tautology") {
+      return {
+        query: head + seg("sql", "SELECT * FROM users WHERE username = '") +
+          seg("inject", "' OR '1'='1' -- ") + seg("comment", "' AND password = 'anything'") + codeLine,
+        matched: [1, 2, 3], leaked: [], rowClass: "",
+        result: {
+          cls: "danger", vcls: "danger", verdict: "Authentication bypassed",
+          title: "Logged in as admin — with no valid password.",
+          detail: "'1'='1' is always true and -- comments out the password check, so every row matches. The app signs you in as the first one.",
+          impactK: "Security impact", impact: "Full authentication bypass. Any account is reachable without credentials."
+        }
+      };
+    }
+    if (kind === "comment") {
+      return {
+        query: head + seg("sql", "SELECT * FROM users WHERE username = '") + seg("data", "admin") +
+          seg("inject", "' -- ") + seg("comment", "' AND password = ''") + codeLine,
+        matched: [1], leaked: [], rowClass: "",
+        result: {
+          cls: "danger", vcls: "danger", verdict: "Account takeover",
+          title: "Logged in as admin.",
+          detail: "The ' closes the username string and -- comments out everything after it, deleting the password check for a chosen account.",
+          impactK: "Security impact", impact: "Targeted takeover of a specific, high-value account."
+        }
+      };
+    }
+    // union
+    return {
+      query: head + seg("sql", "SELECT * FROM users WHERE username = '") +
+        seg("inject", "' UNION SELECT id, service, api_key, 'x', 'y' FROM secrets -- ") +
+        seg("comment", "' AND password = ''") + codeLine,
+      matched: [], leaked: SECRETS.map(function (r) { return r.id; }), rowClass: "",
+      result: {
+        cls: "danger", vcls: "danger", verdict: "Data exfiltration",
+        title: "No login — but secret API keys came back in the results.",
+        detail: "UNION appends rows from another table that has the same column count. The app renders them as if they were user records.",
+        impactK: "Security impact", impact: "Confidential data from an unrelated table is read out through the login form."
+      }
+    };
+  }
+
+  function renderDB(data) {
+    var rows = USERS.map(function (r) {
+      var cls = data.matched.indexOf(r.id) > -1 ? " class=\"matched " + data.rowClass + "\"" : "";
+      return "<tr" + cls + "><td>" + r.id + "</td><td>" + esc(r.username) +
+        '</td><td><span class="sensitive">' + esc(r.password) + "</span></td><td>" +
+        esc(r.role) + "</td><td>" + esc(r.email) + "</td></tr>";
+    }).join("");
+    var html =
+      '<div class="tablewrap"><table><caption>users</caption>' +
+      "<thead><tr><th>id</th><th>username</th><th>password</th><th>role</th><th>email</th></tr></thead>" +
+      "<tbody>" + rows + "</tbody></table></div>";
+
+    if (data.leaked && data.leaked.length) {
+      var lrows = SECRETS.map(function (r) {
+        return '<tr class="matched"><td>' + r.id + "</td><td>" + esc(r.service) +
+          '</td><td><span class="sensitive">' + esc(r.api_key) + "</span></td></tr>";
+      }).join("");
+      html +=
+        '<div class="tablewrap" style="margin-top:12px"><table><caption>secrets — not meant to be reachable from login</caption>' +
+        "<thead><tr><th>id</th><th>service</th><th>api_key</th></tr></thead><tbody>" + lrows + "</tbody></table></div>" +
+        '<p class="leaked-note">↑ These rows leaked through the UNION into the login response.</p>';
+    } else if (!data.matched.length) {
+      html += '<p class="leaked-note" style="color:var(--safe)">0 rows matched — the login is rejected.</p>';
+    }
+    return html;
+  }
+
+  function renderResult(r) {
+    return '<span class="verdict ' + r.vcls + '">' + r.verdict + "</span>" +
+      "<h3>" + esc(r.title) + "</h3><p>" + esc(r.detail) + "</p>" +
+      '<div class="impact"><span class="k">' + r.impactK + "</span>" + esc(r.impact) + "</div>";
+  }
+
+  function run() {
+    var u = document.getElementById("u").value;
+    var p = document.getElementById("p").value;
+    var kind = (current && SCENARIOS[current]) ? SCENARIOS[current].kind : detect(u);
+    var data = compute(kind, u, p);
+
+    document.getElementById("queryOut").innerHTML = '<div class="inspect">' + data.query + "</div>";
+    document.getElementById("dbOut").innerHTML = renderDB(data);
+
+    var rp = document.getElementById("resultPanel");
+    rp.className = "panel stage result " + data.result.cls;
+    document.getElementById("resultOut").innerHTML = renderResult(data.result);
+
+    var live = mode === "secure" ? "safe" : "live";
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector " + live; });
+    rp.classList.add("flash");
+    setTimeout(function () { rp.classList.remove("flash"); }, 650);
+    hasRun = true;
+  }
+
+  // Lightweight classifier for free-typed input.
+  function detect(u) {
+    var s = (u || "").toLowerCase();
+    if (s.indexOf("union") > -1) return "union";
+    if (/'\s*(--|#)/.test(s) && s.indexOf(" or ") === -1) return "comment";
+    if (s.indexOf("'") > -1 && (s.indexOf(" or ") > -1 || /'1'\s*=\s*'1/.test(s))) return "tautology";
+    if (s.indexOf("'") > -1) return "comment";
+    return "normal";
+  }
+
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll(".switch button").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.dataset.mode === m ? "true" : "false");
+    });
+    document.getElementById("modeNote").innerHTML = m === "vuln"
+      ? "<strong>Vulnerable:</strong> the server glues your input straight into the query string."
+      : "<strong>Parameterised:</strong> the query ships with <code>?</code> placeholders and your input is bound separately as data.";
+    if (hasRun) run();
+  }
+
+  function selectScenario(key) {
+    current = key;
+    var s = SCENARIOS[key];
+    document.getElementById("u").value = s.username;
+    document.getElementById("p").value = s.password;
+    document.querySelectorAll(".chip").forEach(function (c) {
+      c.setAttribute("aria-pressed", c.dataset.key === key ? "true" : "false");
+    });
+    run();
+  }
+
+  // Build chips
+  var chipsEl = document.getElementById("chips");
+  Object.keys(SCENARIOS).forEach(function (key) {
+    var s = SCENARIOS[key];
+    var b = document.createElement("button");
+    b.className = "chip";
+    b.dataset.key = key;
+    b.setAttribute("aria-pressed", "false");
+    b.innerHTML = esc(s.label) + '<span class="tag ' + s.tag + '">' + (s.tag === "ok" ? "safe" : "attack") + "</span>";
+    b.addEventListener("click", function () { selectScenario(key); });
+    chipsEl.appendChild(b);
+  });
+
+  document.querySelectorAll(".switch button").forEach(function (b) {
+    b.addEventListener("click", function () { setMode(b.dataset.mode); });
+  });
+  document.getElementById("run").addEventListener("click", function () {
+    // Free-typed input clears the scenario selection unless it still matches.
+    var u = document.getElementById("u").value, p = document.getElementById("p").value;
+    var match = Object.keys(SCENARIOS).filter(function (k) {
+      return SCENARIOS[k].username === u && SCENARIOS[k].password === p;
+    })[0];
+    current = match || null;
+    document.querySelectorAll(".chip").forEach(function (c) {
+      c.setAttribute("aria-pressed", c.dataset.key === current ? "true" : "false");
+    });
+    run();
+  });
+  ["u", "p"].forEach(function (id) {
+    document.getElementById(id).addEventListener("keydown", function (e) {
+      if (e.key === "Enter") document.getElementById("run").click();
+    });
+  });
+
+  // Open in a realistic working state: the classic tautology attack, already run.
+  selectScenario("tautology");
+})();
+</script>

@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Web Security Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: a lesson dashboard — header + a responsive grid of lesson cards.
+     Shares the explainer's palette and IBM Plex pairing so the suite reads as one product. */
+  :root {
+    --bg: #eef1f8;
+    --surface: #ffffff;
+    --surface-2: #e7ebf4;
+    --border: #d4dae8;
+    --fg: #182031;
+    --muted: #5a677e;
+    --accent: #3f5bd6;
+    --accent-soft: #e4e9fb;
+    --danger: #c92f24;
+    --danger-soft: #fbe4e1;
+    --safe: #0a8d64;
+    --safe-soft: #d8f3e8;
+    --amber: #9a6400;
+    --amber-soft: #fbeecd;
+
+    --radius: 16px;
+    --radius-sm: 10px;
+    --maxw: 960px;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1017;
+      --surface: #131b27;
+      --surface-2: #0f1620;
+      --border: #26303f;
+      --fg: #e7ecf5;
+      --muted: #93a1b8;
+      --accent: #7f95ff;
+      --accent-soft: #1d2740;
+      --danger: #ff6d60;
+      --danger-soft: #35201d;
+      --safe: #35e0a1;
+      --safe-soft: #10261f;
+      --amber: #ffc061;
+      --amber-soft: #2c2415;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017;
+    --surface: #131b27;
+    --surface-2: #0f1620;
+    --border: #26303f;
+    --fg: #e7ecf5;
+    --muted: #93a1b8;
+    --accent: #7f95ff;
+    --accent-soft: #1d2740;
+    --danger: #ff6d60;
+    --danger-soft: #35201d;
+    --safe: #35e0a1;
+    --safe-soft: #10261f;
+    --amber: #ffc061;
+    --amber-soft: #2c2415;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding-left: max(18px, env(safe-area-inset-left, 0px));
+    padding-right: max(18px, env(safe-area-inset-right, 0px));
+    padding-block: 36px 60px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  h1 {
+    font-size: clamp(2.1rem, 6vw, 3.1rem);
+    line-height: 1.03;
+    letter-spacing: -.025em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  h1 .hl { color: var(--accent); }
+  .lede {
+    max-width: 60ch;
+    color: var(--muted);
+    font-size: 1.05rem;
+    margin: 0;
+  }
+
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 26px;
+    margin-top: 22px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+  .stat { display: flex; align-items: baseline; gap: 8px; }
+  .stat .n {
+    font-family: var(--mono);
+    font-size: 1.25rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .l {
+    font-size: .82rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+
+  .section-h {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 38px 0 16px;
+    flex-wrap: wrap;
+  }
+  .section-h h2 { font-size: 1.15rem; margin: 0; letter-spacing: -.01em; }
+  .section-h .count { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    text-decoration: none;
+    color: inherit;
+    min-height: 196px;
+    transition: border-color .18s, transform .08s, box-shadow .18s;
+  }
+  a.card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px -16px rgba(20,30,60,.4);
+  }
+  a.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card.planned { opacity: .72; }
+
+  .card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .pill {
+    font-family: var(--mono);
+    font-size: .66rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .pill.cwe { background: var(--surface-2); color: var(--muted); }
+  .pill.live { background: var(--safe-soft); color: var(--safe); }
+  .pill.soon { background: var(--amber-soft); color: var(--amber); }
+
+  .card h3 { font-size: 1.22rem; margin: 0 0 7px; letter-spacing: -.015em; }
+  .card p { margin: 0; color: var(--muted); font-size: .94rem; }
+  .card .owasp {
+    font-family: var(--mono);
+    font-size: .72rem;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+  .card-foot {
+    margin-top: auto;
+    padding-top: 16px;
+    font-family: var(--mono);
+    font-size: .82rem;
+    font-weight: 600;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .card.planned .card-foot { color: var(--muted); font-weight: 400; }
+  a.card:hover .card-foot .arrow { transform: translateX(3px); }
+  .arrow { transition: transform .15s; }
+
+  .about {
+    margin-top: 44px;
+    padding: 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: .92rem;
+    color: var(--muted);
+  }
+  .about h2 { font-size: 1rem; margin: 0 0 8px; color: var(--fg); }
+  .about p { margin: 0 0 8px; max-width: 70ch; }
+  .about a { color: var(--accent); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+    a.card:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Teaching tools · Web application security</p>
+    <h1>Web Security <span class="hl">Lab</span></h1>
+    <p class="lede">Interactive explainers that trace a real attack through a web application — input, query, impact, and the fix — so the mechanism is something you watch rather than memorise. Safe, in-browser simulations with no live target.</p>
+    <div class="stats">
+      <div class="stat"><span class="n">1</span><span class="l">lesson live</span></div>
+      <div class="stat"><span class="n">3</span><span class="l">in progress</span></div>
+      <div class="stat"><span class="n">OWASP</span><span class="l">Top 10 aligned</span></div>
+    </div>
+  </header>
+
+  <div class="section-h">
+    <h2>Lessons</h2>
+    <span class="count">updated Oct 2026</span>
+  </div>
+
+  <div class="grid">
+    <a class="card" href="./sql-injection.html">
+      <div class="card-top">
+        <span class="pill cwe">CWE-89</span>
+        <span class="pill live">Live</span>
+      </div>
+      <h3>SQL Injection</h3>
+      <p>Watch attacker input break out of a query string and turn into code, then flip to a parameterised query and see it fail.</p>
+      <p class="owasp">A03:2021 — Injection</p>
+      <span class="card-foot">Open the explainer <span class="arrow">&rarr;</span></span>
+    </a>
+
+    <div class="card planned">
+      <div class="card-top">
+        <span class="pill cwe">CWE-79</span>
+        <span class="pill soon">Planned</span>
+      </div>
+      <h3>Cross-Site Scripting</h3>
+      <p>Follow untrusted input as it lands in a page and runs as script in another user's browser.</p>
+      <p class="owasp">A03:2021 — Injection</p>
+      <span class="card-foot">Coming soon</span>
+    </div>
+
+    <div class="card planned">
+      <div class="card-top">
+        <span class="pill cwe">CWE-22</span>
+        <span class="pill soon">Planned</span>
+      </div>
+      <h3>Path Traversal</h3>
+      <p>Trace how <code>../</code> sequences walk a file request out of its intended folder to reach files it shouldn't.</p>
+      <p class="owasp">A01:2021 — Broken Access Control</p>
+      <span class="card-foot">Coming soon</span>
+    </div>
+
+    <div class="card planned">
+      <div class="card-top">
+        <span class="pill cwe">CWE-287</span>
+        <span class="pill soon">Planned</span>
+      </div>
+      <h3>Broken Authentication</h3>
+      <p>See how weak session tokens and missing checks let an attacker act as someone else.</p>
+      <p class="owasp">A07:2021 — Identification &amp; Auth Failures</p>
+      <span class="card-foot">Coming soon</span>
+    </div>
+  </div>
+
+  <div class="about">
+    <h2>About this lab</h2>
+    <p>Each explainer is a safe, self-contained simulation that runs entirely in your browser. No real database or server is involved, and all data is invented, so nothing here can be used to attack a live system. The aim is to make the mechanism and its impact visible, and to show the defensive fix alongside every attack.</p>
+    <p>To practise against a real target in a controlled environment, use purpose-built apps such as <a href="https://owasp.org/www-project-juice-shop/" target="_blank" rel="noopener">OWASP Juice Shop</a> or <a href="https://portswigger.net/web-security" target="_blank" rel="noopener">PortSwigger's Web Security Academy</a>.</p>
+  </div>
+</div>
+
+</body>
+</html>
