@@ -542,7 +542,7 @@
 
   var USERS = [
     { id: 1, username: "admin",  password: "S3cur3Admin!", role: "admin",    email: "admin@acme.test" },
-    { id: 2, username: "j.mace", password: "hunter2",      role: "lecturer", email: "j.mace@acme.test" },
+    { id: 2, username: "j.smith", password: "hunter2",      role: "lecturer", email: "j.smith@acme.test" },
     { id: 3, username: "guest",  password: "guest",        role: "student",  email: "guest@acme.test" }
   ];
   var SECRETS = [
@@ -551,7 +551,7 @@
   ];
 
   var SCENARIOS = {
-    normal:    { label: "Normal login",        tag: "ok",  username: "j.mace",            password: "hunter2",   kind: "normal" },
+    normal:    { label: "Normal login",        tag: "ok",  username: "j.smith",            password: "hunter2",   kind: "normal" },
     tautology: { label: "' OR '1'='1",         tag: "bad", username: "' OR '1'='1' -- ",  password: "anything",  kind: "tautology" },
     comment:   { label: "admin'--",            tag: "bad", username: "admin' -- ",        password: "",          kind: "comment" },
     union:     { label: "UNION data theft",    tag: "bad", username: "' UNION SELECT id, service, api_key, 'x', 'y' FROM secrets -- ", password: "", kind: "union" }
