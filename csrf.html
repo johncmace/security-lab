@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>CSRF X-Ray</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: a cross-site pipeline (attacker's page → the request the browser sends → what the bank does).
+     The key idea is ambient authority: the browser auto-attaches the victim's session cookie.
+     Shares the suite's palette and IBM Plex pairing. Nothing is actually submitted — effects are depicted. */
+  :root {
+    --bg: #eef1f8; --surface: #ffffff; --surface-2: #e7ebf4; --border: #d4dae8;
+    --fg: #182031; --muted: #5a677e; --accent: #3f5bd6; --accent-soft: #e4e9fb;
+    --danger: #c92f24; --danger-soft: #fbe4e1; --safe: #0a8d64; --safe-soft: #d8f3e8;
+    --data-ink: #9a6400; --data-soft: #fbeecd;
+    --code-bg: #0e1626; --code-fg: #c7d2e6; --code-dim: #6f7f9c;
+    --code-sql: #8fa6cf; --code-data: #ffc061; --code-inject: #ff6d60; --code-comment: #5c6b86; --code-param: #4fd6a3;
+    --radius: 14px; --radius-sm: 9px; --maxw: 920px;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+      --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+      --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+      --data-ink: #ffc061; --data-soft: #2c2415; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017; --surface: #131b27; --surface-2: #0f1620; --border: #26303f;
+    --fg: #e7ecf5; --muted: #93a1b8; --accent: #7f95ff; --accent-soft: #1d2740;
+    --danger: #ff6d60; --danger-soft: #35201d; --safe: #35e0a1; --safe-soft: #10261f;
+    --data-ink: #ffc061; --data-soft: #2c2415; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)); padding-block: 28px 56px; }
+
+  .backlink { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: .76rem; color: var(--muted); text-decoration: none; margin-bottom: 18px; transition: color .15s; }
+  .backlink:hover { color: var(--accent); }
+  .eyebrow { font-family: var(--mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.05; letter-spacing: -.02em; margin: 0 0 12px; text-wrap: balance; }
+  h1 .hl { color: var(--danger); }
+  .lede { max-width: 60ch; color: var(--muted); font-size: 1.02rem; margin: 0 0 22px; }
+
+  .modebar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; }
+  .switch { display: inline-flex; padding: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; gap: 2px; }
+  .switch button { font-family: var(--mono); font-size: .82rem; font-weight: 500; border: 0; background: transparent; color: var(--muted); padding: 7px 16px; border-radius: 999px; cursor: pointer; transition: background .18s, color .18s; }
+  .switch button[aria-pressed="true"] { color: #fff; }
+  .switch button[data-mode="vuln"][aria-pressed="true"] { background: var(--danger); }
+  .switch button[data-mode="secure"][aria-pressed="true"] { background: var(--safe); color: #06231a; }
+  .mode-note { font-size: .9rem; color: var(--muted); min-width: 0; flex: 1 1 240px; }
+  .mode-note strong { color: var(--fg); }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .panel-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .stepno { font-family: var(--mono); font-size: .72rem; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 7px; letter-spacing: .05em; }
+  .panel-h h2 { font-size: 1.04rem; margin: 0; letter-spacing: -.01em; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-family: var(--mono); font-size: .8rem; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); padding: 8px 12px; border-radius: 999px; cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
+  .chip:hover { border-color: var(--accent); }
+  .chip:active { transform: translateY(1px); }
+  .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .chip .tag { font-size: .64rem; text-transform: uppercase; letter-spacing: .08em; padding: 1px 5px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+  .chip .tag.ok { background: var(--safe-soft); color: var(--safe); }
+  .chip .tag.bad { background: var(--danger-soft); color: var(--danger); }
+
+  .actionbar { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .run { font-family: var(--sans); font-weight: 600; font-size: .92rem; color: #fff; background: var(--accent); border: 0; border-radius: var(--radius-sm); padding: 11px 20px; cursor: pointer; white-space: nowrap; transition: filter .15s, transform .05s; }
+  .run:hover { filter: brightness(1.08); }
+  .run:active { transform: translateY(1px); }
+  .actionbar .hint { font-size: .86rem; color: var(--muted); min-width: 0; }
+
+  .pipe { margin-top: 20px; display: flex; flex-direction: column; }
+  .connector { width: 2px; height: 20px; margin-left: 30px; background: var(--border); }
+  .connector.live { background: linear-gradient(var(--danger), var(--border)); }
+  .connector.safe { background: linear-gradient(var(--safe), var(--border)); }
+
+  .inspect { font-family: var(--mono); font-size: .86rem; line-height: 1.75; background: var(--code-bg); color: var(--code-fg); border-radius: var(--radius-sm); padding: 14px 15px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  .inspect + .inspect { margin-top: 12px; }
+  .inspect .lbl { display: block; font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--code-dim); margin-bottom: 7px; }
+  .q-sql { color: var(--code-sql); }
+  .q-data { color: var(--code-data); }
+  .q-inject { color: var(--code-inject); font-weight: 600; background: #ff6d6020; border-radius: 3px; padding: 0 1px; }
+  .q-param { color: var(--code-param); font-weight: 600; }
+  .q-comment { color: var(--code-comment); }
+
+  .placeholder { font-family: var(--mono); font-size: .84rem; color: var(--muted); background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 16px; text-align: center; }
+
+  .browser { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface); }
+  .browser-bar { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .dots { display: flex; gap: 5px; }
+  .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--border); display: block; }
+  .url { font-family: var(--mono); font-size: .76rem; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .url.evil { color: var(--danger); }
+  .browser-view { padding: 20px 16px; min-height: 96px; }
+  .bait { text-align: center; }
+  .bait .big { font-size: 1.15rem; font-weight: 600; margin: 0 0 6px; }
+  .bait p { margin: 0; color: var(--muted); font-size: .9rem; }
+  .bait .warn { margin-top: 14px; font-family: var(--mono); font-size: .76rem; color: var(--danger); background: var(--danger-soft); border-radius: 6px; padding: 8px 11px; display: inline-block; }
+
+  .resp { border-radius: var(--radius-sm); padding: 14px 15px; border: 1px solid var(--border); }
+  .resp.ok { background: var(--safe-soft); border-color: transparent; }
+  .resp.bad { background: var(--danger-soft); border-color: transparent; }
+  .resp .status { font-family: var(--mono); font-weight: 600; font-size: .9rem; margin-bottom: 6px; }
+  .resp.ok .status { color: var(--safe); }
+  .resp.bad .status { color: var(--danger); }
+  .resp .msg { font-size: .96rem; }
+
+  .result { border-left: 4px solid var(--border); margin-top: 14px; padding: 16px; background: var(--surface); border-radius: var(--radius); }
+  .result.ok { border-left-color: var(--safe); }
+  .result.danger { border-left-color: var(--danger); }
+  .result.safe { border-left-color: var(--safe); }
+  .verdict { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; margin-bottom: 10px; }
+  .verdict.ok { background: var(--safe-soft); color: var(--safe); }
+  .verdict.danger { background: var(--danger-soft); color: var(--danger); }
+  .verdict.safe { background: var(--safe-soft); color: var(--safe); }
+  .result h3 { margin: 0 0 6px; font-size: 1.12rem; letter-spacing: -.01em; }
+  .result p { margin: 0; color: var(--muted); }
+  .impact { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); font-size: .95rem; }
+  .impact .k { font-family: var(--mono); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px; }
+
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .meta { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 13px; }
+  .meta .k { font-family: var(--mono); font-size: .64rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 5px; }
+  .meta .v { font-weight: 600; font-size: .96rem; }
+  .meta .v.crit { color: var(--danger); }
+  .sev-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .sev-pill { font-family: var(--mono); font-weight: 600; font-size: .8rem; padding: 6px 14px; border-radius: 999px; background: var(--danger); color: #fff; letter-spacing: .03em; }
+  .sev-row span.exp { color: var(--muted); font-size: .9rem; min-width: 0; }
+
+  .foot { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--border); font-size: .88rem; color: var(--muted); }
+  .foot a { color: var(--accent); }
+  .foot p { margin: 0 0 8px; }
+
+  .flash { animation: flash .6s ease; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--danger); } 30% { box-shadow: 0 0 0 3px var(--danger-soft); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="backlink" href="./index.html">&larr; Web Security Lab</a>
+    <p class="eyebrow">Web security · OWASP A01 · CWE-352</p>
+    <h1>Cross-site request forgery, <span class="hl">X-rayed</span></h1>
+    <p class="lede">You're logged into your bank. You open an unrelated page in another tab. That page quietly fires a request back to the bank — and because your browser attaches your session cookie to <em>every</em> request to that site, the bank can't tell the difference between you and the attacker's page. Watch the forged request go through, then add the defences that stop it.</p>
+  </header>
+
+  <div class="modebar">
+    <div class="switch" role="group" aria-label="Protection mode">
+      <button data-mode="vuln" aria-pressed="true">Vulnerable</button>
+      <button data-mode="secure" aria-pressed="false">Protected</button>
+    </div>
+    <p class="mode-note" id="modeNote"><strong>Vulnerable:</strong> no CSRF token, and the session cookie is sent on cross-site requests.</p>
+  </div>
+
+  <section class="panel">
+    <div class="panel-h"><span class="stepno">01</span><h2>Choose the forged action</h2></div>
+    <div class="chips" id="chips" role="group" aria-label="Attack scenario"></div>
+    <div class="actionbar">
+      <button class="run" id="run">Open the page as the victim</button>
+      <span class="hint">You're already logged in to <strong>bank.acme.test</strong> in another tab.</span>
+    </div>
+  </section>
+
+  <div class="pipe">
+    <div class="connector" id="c1"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">02</span><h2>The page the victim opens</h2></div>
+      <div id="trapOut"><div class="placeholder">Open the page to see what it contains.</div></div>
+    </section>
+
+    <div class="connector" id="c2"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">03</span><h2>The request the browser sends</h2></div>
+      <div id="reqOut"><div class="placeholder">The outgoing request will appear here.</div></div>
+    </section>
+
+    <div class="connector" id="c3"></div>
+    <section class="panel stage">
+      <div class="panel-h"><span class="stepno">04</span><h2>What the bank does</h2></div>
+      <div id="respOut"><div class="placeholder">The bank's response appears here.</div></div>
+      <div id="resultOut"></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:14px">
+    <div class="panel-h"><span class="stepno">·</span><h2>Why it matters</h2></div>
+    <div class="meta-grid">
+      <div class="meta"><span class="k">Vulnerability</span><span class="v">Request Forgery</span></div>
+      <div class="meta"><span class="k">OWASP Top 10</span><span class="v">A01:2021 — Broken Access Control</span></div>
+      <div class="meta"><span class="k">Weakness</span><span class="v">CWE-352</span></div>
+      <div class="meta"><span class="k">Exploitability</span><span class="v crit">Medium — victim must be logged in</span></div>
+    </div>
+    <div class="sev-row">
+      <span class="sev-pill">Risk: High</span>
+      <span class="exp">Any state-changing action the victim can perform — transfer funds, change their email or password — can be triggered without their knowledge or consent.</span>
+    </div>
+  </section>
+
+  <div class="foot">
+    <p>This is a safe, in-browser simulation. No request is actually sent to any site — the pages, cookies and responses are invented and depicted.</p>
+    <p>To practise against a real target in a controlled lab, use <a href="https://owasp.org/www-project-juice-shop/" target="_blank" rel="noopener">OWASP Juice Shop</a> or <a href="https://portswigger.net/web-security/csrf" target="_blank" rel="noopener">PortSwigger's CSRF labs</a>.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SCENARIOS = {
+    legit:    { label: "Your own transfer",      tag: "ok",  kind: "legit" },
+    transfer: { label: "Hidden money transfer",  tag: "bad", kind: "transfer" },
+    email:    { label: "Change account email",   tag: "bad", kind: "email" },
+    getimg:   { label: "Transfer via <img>",      tag: "bad", kind: "getimg" }
+  };
+
+  var ACTIONS = {
+    legit:    { method: "POST", path: "/transfer", body: "to=landlord&amount=800", host: "bank.acme.test", site: "bank.acme.test/transfer", what: "pay £800 to your landlord" },
+    transfer: { method: "POST", path: "/transfer", body: "to=attacker&amount=5000", host: "bank.acme.test", site: "free-prize.example", what: "transfer £5,000 to the attacker" },
+    email:    { method: "POST", path: "/account/email", body: "email=attacker@evil.example", host: "bank.acme.test", site: "free-prize.example", what: "change your account email to the attacker's" },
+    getimg:   { method: "GET",  path: "/transfer?to=attacker&amount=5000", body: "", host: "bank.acme.test", site: "free-prize.example", what: "transfer £5,000 using only an image tag" }
+  };
+
+  var mode = "vuln";
+  var current = "transfer";
+  var hasRun = false;
+
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  var seg = function (k, t) { return '<span class="q-' + k + '">' + esc(t) + "</span>"; };
+  var line = function (k, t) { return seg(k, t) + "\n"; };
+
+  function trap(kind) {
+    var a = ACTIONS[kind];
+    if (kind === "legit") {
+      var board = '<div class="browser"><div class="browser-bar"><span class="dots"><i></i><i></i><i></i></span>' +
+        '<span class="url">bank.acme.test/transfer</span></div>' +
+        '<div class="browser-view"><div class="bait"><p class="big">Make a payment</p>' +
+        '<p>You fill in the transfer form on the bank’s own page and press Pay.</p></div></div></div>';
+      var code = '<div class="inspect"><span class="lbl">The bank’s own form — it carries a server-issued token</span>' +
+        line("sql", '<form action="/transfer" method="POST">') +
+        line("sql", '  <input name="to" value="landlord">') +
+        line("sql", '  <input name="amount" value="800">') +
+        seg("param", '  <input type="hidden" name="csrf_token" value="9f3c…">') + "\n" +
+        seg("sql", "</form>") + "</div>";
+      return board + code;
+    }
+    var bait = '<div class="browser"><div class="browser-bar"><span class="dots"><i></i><i></i><i></i></span>' +
+      '<span class="url evil">' + esc(a.site) + '</span></div>' +
+      '<div class="browser-view"><div class="bait"><p class="big">🎉 You’ve won a £50 voucher!</p>' +
+      '<p>Loading your reward…</p>' +
+      '<span class="warn">⚠ a hidden request fired to bank.acme.test with no clicks</span></div></div></div>';
+    var code;
+    if (kind === "getimg") {
+      code = '<div class="inspect"><span class="lbl">The entire attack — one image tag</span>' +
+        seg("inject", '<img src="https://bank.acme.test/transfer?to=attacker&amount=5000">') + "</div>";
+    } else {
+      code = '<div class="inspect"><span class="lbl">Hidden auto-submitting form on the attacker’s page</span>' +
+        line("sql", '<form action="https://bank.acme.test' + a.path + '" method="POST">') +
+        line("inject", '  <input type="hidden" name="' + (kind === "email" ? "email" : "to") + '" value="' + (kind === "email" ? "attacker@evil.example" : "attacker") + '">') +
+        (kind === "email" ? "" : line("inject", '  <input type="hidden" name="amount" value="5000">')) +
+        line("sql", "</form>") +
+        seg("inject", "<script>document.forms[0].submit()<\/script>") + seg("q-comment", "   // fires on load, no clicks") + "</div>";
+    }
+    return bait + code;
+  }
+
+  function request(kind) {
+    var a = ACTIONS[kind];
+    var out = '<div class="inspect"><span class="lbl">HTTP request your browser sends to the bank</span>';
+    out += line("sql", a.method + " " + a.path + " HTTP/1.1");
+    out += line("sql", "Host: " + a.host);
+
+    var crossSite = kind !== "legit";
+    // Cookie line
+    if (mode === "secure" && crossSite) {
+      out += line("comment", "Cookie: — withheld (SameSite=Lax blocks it on a cross-site request)");
+    } else {
+      out += seg("data", "Cookie: session=sid=4f9a2e8b1c…") +
+        seg("q-comment", crossSite ? "   ← your browser attaches this automatically" : "   (same-site request)") + "\n";
+    }
+    // CSRF token line
+    if (kind === "legit") {
+      out += line("param", "csrf_token: 9f3c…  (valid, issued by the bank’s page)");
+    } else if (mode === "secure") {
+      out += line("param", "csrf_token: — missing (the attacker’s page can’t read yours)");
+    } else {
+      out += line("inject", "(no csrf_token — nothing stops the request)");
+    }
+    // Body
+    if (a.body) {
+      out += "\n" + (kind === "legit" ? seg("data", a.body) : seg("inject", a.body)) + "\n";
+    }
+    return out + "</div>";
+  }
+
+  function response(kind) {
+    var blocked = mode === "secure" && kind !== "legit";
+    if (blocked) {
+      return '<div class="resp bad"><div class="status">403 Forbidden</div>' +
+        '<div class="msg">Rejected: no valid session cookie and no CSRF token. The bank can tell this request did not come from its own page.</div></div>';
+    }
+    var a = ACTIONS[kind];
+    var msg = kind === "legit" ? "£800 paid to landlord — the transfer you intended."
+      : kind === "email" ? "Account email changed to attacker@evil.example."
+      : "£5,000 transferred to attacker.";
+    return '<div class="resp ok"><div class="status">200 OK</div><div class="msg">' + esc(msg) + "</div></div>";
+  }
+
+  function result(kind) {
+    if (kind === "legit") {
+      return { cls: "ok", verdict: "Transfer completed", title: "Your intended payment went through.",
+        detail: "The request came from the bank’s own page, so it carried the secret token that proves it.",
+        impK: "Security impact", imp: "None — this is the action working as designed." };
+    }
+    if (mode === "secure") {
+      return { cls: "safe", verdict: "Forgery blocked", title: "The bank rejected the forged request.",
+        detail: "SameSite kept your cookie from being sent, and the missing anti-CSRF token gave the bank a second reason to refuse. Either defence alone stops the attack.",
+        impK: "Why it's safe", imp: "The attacker’s page can neither read your token nor borrow your cookie across sites." };
+    }
+    var imp = kind === "email" ? "The attacker now controls the account’s email — the first step to a full takeover via password reset."
+      : "Money moved out of the victim’s account with no interaction beyond opening a page.";
+    return { cls: "danger", verdict: "Action forged", title: "The bank carried out the request as if you had made it.",
+      detail: "Your browser attached your session cookie automatically, and with no token to check, the bank had no way to tell the request came from the attacker’s page.",
+      impK: "Security impact", imp: imp };
+  }
+
+  function resetPipeline() {
+    document.getElementById("trapOut").innerHTML = '<div class="placeholder">Press “Open the page as the victim” to run.</div>';
+    document.getElementById("reqOut").innerHTML = '<div class="placeholder">The outgoing request will appear here.</div>';
+    document.getElementById("respOut").innerHTML = '<div class="placeholder">The bank’s response appears here.</div>';
+    document.getElementById("resultOut").innerHTML = "";
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector"; });
+    hasRun = false;
+  }
+
+  function run() {
+    var kind = SCENARIOS[current].kind;
+    document.getElementById("trapOut").innerHTML = trap(kind);
+    document.getElementById("reqOut").innerHTML = request(kind);
+    document.getElementById("respOut").innerHTML = response(kind);
+    var r = result(kind);
+    document.getElementById("resultOut").innerHTML =
+      '<div class="result ' + r.cls + '"><span class="verdict ' + r.cls + '">' + r.verdict + "</span><h3>" +
+      esc(r.title) + "</h3><p>" + esc(r.detail) + '</p><div class="impact"><span class="k">' + r.impK + "</span>" + esc(r.imp) + "</div></div>";
+
+    var live = (mode === "secure" && kind !== "legit") || kind === "legit" ? "safe" : "live";
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector " + live; });
+    var rp = document.getElementById("resultOut").firstChild;
+    if (rp) { rp.classList.add("flash"); setTimeout(function () { rp.classList.remove("flash"); }, 650); }
+    hasRun = true;
+  }
+
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll(".switch button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.mode === m ? "true" : "false"); });
+    document.getElementById("modeNote").innerHTML = m === "vuln"
+      ? "<strong>Vulnerable:</strong> no CSRF token, and the session cookie is sent on cross-site requests."
+      : "<strong>Protected:</strong> the bank requires an anti-CSRF token and marks its session cookie SameSite=Lax.";
+    if (hasRun) run();
+  }
+
+  function selectScenario(key) {
+    current = key;
+    document.querySelectorAll(".chip").forEach(function (c) { c.setAttribute("aria-pressed", c.dataset.key === key ? "true" : "false"); });
+    resetPipeline();
+  }
+
+  var chipsEl = document.getElementById("chips");
+  Object.keys(SCENARIOS).forEach(function (key) {
+    var s = SCENARIOS[key];
+    var b = document.createElement("button");
+    b.className = "chip"; b.dataset.key = key; b.setAttribute("aria-pressed", "false");
+    b.innerHTML = esc(s.label) + '<span class="tag ' + s.tag + '">' + (s.tag === "ok" ? "safe" : "attack") + "</span>";
+    b.addEventListener("click", function () { selectScenario(key); });
+    chipsEl.appendChild(b);
+  });
+  document.querySelectorAll(".switch button").forEach(function (b) { b.addEventListener("click", function () { setMode(b.dataset.mode); }); });
+  document.getElementById("run").addEventListener("click", run);
+
+  selectScenario("transfer");
+  run();
+})();
+</script>
+
+</body>
+</html>
