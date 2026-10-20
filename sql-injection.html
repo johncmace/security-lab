@@ -1,3 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
 <title>SQL Injection X-Ray</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
@@ -450,7 +462,8 @@
     .run { width: 100%; }
   }
 </style>
-
+</head>
+<body>
 <div class="wrap">
   <header>
     <a class="backlink" href="./index.html">&larr; Web Security Lab</a>
@@ -722,6 +735,15 @@
     if (hasRun) run();
   }
 
+  function resetPipeline() {
+    document.getElementById("queryOut").innerHTML = '<div class="placeholder">Press “Send login request” to run the attack.</div>';
+    document.getElementById("dbOut").innerHTML = '<div class="placeholder">The matched rows will light up here.</div>';
+    document.getElementById("resultPanel").className = "panel stage result";
+    document.getElementById("resultOut").innerHTML = '<div class="placeholder">The result of the login attempt appears here.</div>';
+    ["c1", "c2", "c3"].forEach(function (id) { document.getElementById(id).className = "connector"; });
+    hasRun = false;
+  }
+
   function selectScenario(key) {
     current = key;
     var s = SCENARIOS[key];
@@ -730,7 +752,7 @@
     document.querySelectorAll(".chip").forEach(function (c) {
       c.setAttribute("aria-pressed", c.dataset.key === key ? "true" : "false");
     });
-    run();
+    resetPipeline();
   }
 
   // Build chips
@@ -767,7 +789,11 @@
     });
   });
 
-  // Open in a realistic working state: the classic tautology attack, already run.
+  // Open in a realistic working state: the classic tautology attack, already run once.
   selectScenario("tautology");
+  run();
 })();
 </script>
+
+</body>
+</html>
